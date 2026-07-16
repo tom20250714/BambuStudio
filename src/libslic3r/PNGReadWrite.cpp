@@ -185,7 +185,9 @@ bool decode_colored_png(const ReadBuf &in_buf, ImageColorscale &out_img)
 // Based on https://www.lemoda.net/c/write-png/
 // png_color_type is PNG_COLOR_TYPE_RGB or PNG_COLOR_TYPE_GRAY
 //FIXME maybe better to use tdefl_write_image_to_png_file_in_memory() instead?
-static bool write_rgb_or_gray_to_file(const char *file_name_utf8, size_t width, size_t height, int png_color_type, const uint8_t *data, bool flip = false)
+static bool write_rgb_or_gray_to_file(const char *file_name_utf8, size_t width, size_t height,
+                                      int png_color_type, const uint8_t *data, bool flip = false,
+                                      bool fast_compression = false)
 {
     bool         result       = false;
 
@@ -228,6 +230,10 @@ static bool write_rgb_or_gray_to_file(const char *file_name_utf8, size_t width, 
         PNG_INTERLACE_NONE,
         PNG_COMPRESSION_TYPE_DEFAULT,
         PNG_FILTER_TYPE_DEFAULT);
+    if (fast_compression) {
+        png_set_compression_level(png_ptr, 1);
+        png_set_filter(png_ptr, PNG_FILTER_TYPE_BASE, PNG_FILTER_NONE);
+    }
 
     // Initialize rows of PNG.
     row_pointers = reinterpret_cast<png_byte**>(::png_malloc(png_ptr, height * sizeof(png_byte*)));
@@ -299,6 +305,14 @@ bool write_gray_to_file(const std::string &file_name_utf8, size_t width, size_t 
 {
     assert(width * height == data_gray.size());
     return write_gray_to_file(file_name_utf8.c_str(), width, height, data_gray.data());
+}
+
+bool write_gray_to_file_fast(const std::string &file_name_utf8, size_t width, size_t height,
+                             const std::vector<uint8_t> &data_gray)
+{
+    assert(width * height == data_gray.size());
+    return write_rgb_or_gray_to_file(file_name_utf8.c_str(), width, height,
+                                     PNG_COLOR_TYPE_GRAY, data_gray.data(), false, true);
 }
 
 // Scaled variants are mostly useful for debugging purposes, for example to export images of low resolution distance fileds.

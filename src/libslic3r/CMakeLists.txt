@@ -512,6 +512,13 @@ add_library(libslic3r STATIC ${lisbslic3r_sources}
     ${OpenVDBUtils_SOURCES})
 source_group(TREE ${CMAKE_CURRENT_SOURCE_DIR} FILES ${lisbslic3r_sources})
 
+# Independent DLP engine (Git submodule).
+set(DLP_ENGINE_MODULE_DIR "${CMAKE_SOURCE_DIR}/external/dlp-engine")
+if (EXISTS "${DLP_ENGINE_MODULE_DIR}/CMakeLists.txt")
+    add_subdirectory("${DLP_ENGINE_MODULE_DIR}" "${CMAKE_BINARY_DIR}/dlp-engine")
+    dlp_engine_attach(libslic3r "${CMAKE_SOURCE_DIR}/src")
+endif ()
+
 if (SLIC3R_STATIC)
     set(CGAL_Boost_USE_STATIC_LIBS ON CACHE BOOL "" FORCE)
 endif ()

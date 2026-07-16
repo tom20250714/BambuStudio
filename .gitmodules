@@ -1,0 +1,4 @@
+[submodule "external/dlp-engine"]
+	path = external/dlp-engine
+	url = https://github.com/tom20250714/PrusaSlicer.git
+	branch = dlp-engine
