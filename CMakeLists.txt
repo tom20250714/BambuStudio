@@ -197,6 +197,15 @@ set(CMAKE_POSITION_INDEPENDENT_CODE ON)
 # WIN10SDK_PATH is used to point CMake to the WIN10 SDK installation directory.
 # We pick it from environment if it is not defined in another way
 if(WIN32)
+    # Do not mix MinGW libraries and headers into an MSVC build. pkg-config is
+    # still used explicitly for the bundled FFmpeg .pc files.
+    list(APPEND CMAKE_IGNORE_PREFIX_PATH "C:/msys64/mingw64")
+    if(NOT PKG_CONFIG_EXECUTABLE AND
+       EXISTS "C:/msys64/mingw64/bin/pkg-config.exe")
+        set(PKG_CONFIG_EXECUTABLE "C:/msys64/mingw64/bin/pkg-config.exe"
+            CACHE FILEPATH "pkg-config executable")
+    endif()
+
     if(EXISTS "${CMAKE_SOURCE_DIR}/scripts/hooks/pre-commit"  AND EXISTS "${CMAKE_SOURCE_DIR}/.git")
        if(IS_DIRECTORY "${CMAKE_SOURCE_DIR}/.git")
             message(STATUS ".git: directory")
@@ -428,7 +437,13 @@ function(slic3r_remap_configs targets from_Cfg to_Cfg)
 
         foreach(tgt ${targets})
             if(TARGET ${tgt})
-                set_target_properties(${tgt} PROPERTIES MAP_IMPORTED_CONFIG_${from_CFG} ${to_Cfg})
+                get_target_property(aliased_tgt ${tgt} ALIASED_TARGET)
+                if(aliased_tgt)
+                    set(remap_tgt ${aliased_tgt})
+                else()
+                    set(remap_tgt ${tgt})
+                endif()
+                set_target_properties(${remap_tgt} PROPERTIES MAP_IMPORTED_CONFIG_${from_CFG} ${to_Cfg})
             endif()
         endforeach()
     endif()

@@ -67,7 +67,7 @@ SET PS_VERSION_SUPPORTED=16
 SET PS_VERSION_EXCEEDED=19
 SET VSWHERE=%ProgramFiles(x86)%\Microsoft Visual Studio\Installer\vswhere.exe
 IF NOT EXIST "%VSWHERE%" SET VSWHERE=%ProgramFiles%\Microsoft Visual Studio\Installer\vswhere.exe
-FOR /F "tokens=4 USEBACKQ delims=." %%I IN (`"%VSWHERE%" -nologo -property productId`) DO SET PS_PRODUCT_DEFAULT=%%I
+FOR /F "tokens=4 USEBACKQ delims=." %%I IN (`"%VSWHERE%" -products * -latest -nologo -property productId`) DO SET PS_PRODUCT_DEFAULT=%%I
 IF "%PS_PRODUCT_DEFAULT%" EQU "" (
     SET EXIT_STATUS=-1
     @ECHO ERROR: No Visual Studio installation found. 1>&2
@@ -75,7 +75,7 @@ IF "%PS_PRODUCT_DEFAULT%" EQU "" (
 )
 REM Default to the latest supported version if multiple are available
 FOR /F "tokens=1 USEBACKQ delims=." %%I IN (
-    `^""%VSWHERE%" -version "[%PS_VERSION_SUPPORTED%,%PS_VERSION_EXCEEDED%)" -latest -nologo -property catalog_buildVersion^"`
+    `^""%VSWHERE%" -products * -version "[%PS_VERSION_SUPPORTED%,%PS_VERSION_EXCEEDED%)" -latest -nologo -property catalog_buildVersion^"`
 ) DO SET PS_VERSION_SUPPORTED=%%I
 
 REM Probe build directories and system state for reasonable default arguments
@@ -158,6 +158,7 @@ IF NOT EXIST "%MSVC_DIR%" (
     @ECHO ERROR: Compatible Visual Studio installation not found. 1>&2
     GOTO :HELP
 )
+SET "PATH=%MSVC_DIR%\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\bin;%PATH%"
 CALL :RESOLVE_CMAKE_GENERATOR
 IF "%PS_CMAKE_GENERATOR%" EQU "" GOTO :HELP
 REM Give the user a chance to cancel if we found something odd.
@@ -200,9 +201,9 @@ IF "%PS_STEPS_DIRTY%" EQU "" (
     CALL :MAKE_OR_CLEAN_DIRECTORY "%PS_DESTDIR%"
 )
 cd deps\build || GOTO :END
-%PS_CMAKE_EXE% .. %PS_CMAKE_GENERATOR_ARGS% -DDESTDIR="%PS_DESTDIR%"
+"%PS_CMAKE_EXE%" .. %PS_CMAKE_GENERATOR_ARGS% -DDESTDIR="%PS_DESTDIR%"
 IF %ERRORLEVEL% NEQ 0 IF "%PS_STEPS_DIRTY%" NEQ "" (
-    (del CMakeCache.txt && %PS_CMAKE_EXE% .. %PS_CMAKE_GENERATOR_ARGS% -DDESTDIR="%PS_DESTDIR%") || GOTO :END
+    (del CMakeCache.txt && "%PS_CMAKE_EXE%" .. %PS_CMAKE_GENERATOR_ARGS% -DDESTDIR="%PS_DESTDIR%") || GOTO :END
 ) ELSE GOTO :END
 (echo %PS_DESTDIR%)> "%PS_DEPS_PATH_FILE%"
 msbuild /m ALL_BUILD.vcxproj /p:Configuration=%PS_CONFIG%  /v:quiet || GOTO :END
@@ -223,9 +224,9 @@ SET PS_PROJECT_IS_OPEN=
 FOR /F "tokens=2 delims=," %%I in (
     'tasklist /V /FI "IMAGENAME eq devenv.exe " /NH /FO CSV ^| find "%PS_SOLUTION_NAME%"'
 ) do SET PS_PROJECT_IS_OPEN=%%~I
-%PS_CMAKE_EXE% .. %PS_CMAKE_GENERATOR_ARGS% -DCMAKE_PREFIX_PATH="%PS_DESTDIR%\usr\local" -DCMAKE_CONFIGURATION_TYPES=%PS_CONFIG_LIST%
+"%PS_CMAKE_EXE%" .. %PS_CMAKE_GENERATOR_ARGS% -DCMAKE_PREFIX_PATH="%PS_DESTDIR%\usr\local" -DCMAKE_CONFIGURATION_TYPES=%PS_CONFIG_LIST%
 IF %ERRORLEVEL% NEQ 0 IF "%PS_STEPS_DIRTY%" NEQ "" (
-    (del CMakeCache.txt && %PS_CMAKE_EXE% .. %PS_CMAKE_GENERATOR_ARGS% -DCMAKE_PREFIX_PATH="%PS_DESTDIR%\usr\local" -DCMAKE_CONFIGURATION_TYPES=%PS_CONFIG_LIST%) || GOTO :END
+    (del CMakeCache.txt && "%PS_CMAKE_EXE%" .. %PS_CMAKE_GENERATOR_ARGS% -DCMAKE_PREFIX_PATH="%PS_DESTDIR%\usr\local" -DCMAKE_CONFIGURATION_TYPES=%PS_CONFIG_LIST%) || GOTO :END
 ) ELSE GOTO :END
 REM Skip the build step if we're using the undocumented app-cmake to regenerate the full config from inside devenv
 IF "%PS_STEPS%" NEQ "app-cmake" msbuild /m ALL_BUILD.vcxproj /p:Configuration=%PS_CONFIG% /v:quiet || GOTO :END

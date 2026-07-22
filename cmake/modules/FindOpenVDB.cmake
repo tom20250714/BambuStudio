@@ -318,10 +318,15 @@ find_package_handle_standard_args(OpenVDB
 # Set the ABI number the library was built against. Uses vdb_print
 find_program(OPENVDB_PRINT vdb_print PATHS ${OpenVDB_INCLUDE_DIR} )
 
-OPENVDB_ABI_VERSION_FROM_PRINT(
-  "${OPENVDB_PRINT}"
-  ABI OpenVDB_ABI
-)
+if(MSVC AND OPENVDB_PRINT MATCHES "[/\\\\]msys64[/\\\\]mingw64[/\\\\]")
+  # Never infer the bundled MSVC library ABI from an unrelated MSYS2 tool.
+  set(OpenVDB_ABI "${OpenVDB_MAJOR_VERSION}")
+else()
+  OPENVDB_ABI_VERSION_FROM_PRINT(
+    "${OPENVDB_PRINT}"
+    ABI OpenVDB_ABI
+  )
+endif()
 
 if(NOT OpenVDB_FIND_QUIETLY)
   if(NOT OpenVDB_ABI)

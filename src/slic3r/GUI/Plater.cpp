@@ -37,6 +37,9 @@
 #include <wx/statbox.h>
 #include <wx/statbmp.h>
 #include <wx/filedlg.h>
+#include <wx/dirdlg.h>
+#include <wx/textctrl.h>
+#include <wx/checkbox.h>
 #include <wx/dnd.h>
 #include <wx/progdlg.h>
 #include <wx/timer.h>
@@ -61,6 +64,7 @@
 #include "libslic3r/Format/STL.hpp"
 #include "libslic3r/Format/STEP.hpp"
 #include "libslic3r/Format/AMF.hpp"
+#include "../../../external/dlp-engine/src/libslic3r/DLP/DLPPrint.hpp"
 //#include "libslic3r/Format/3mf.hpp"
 #include "libslic3r/Format/bbs_3mf.hpp"
 #include "libslic3r/TexturePainting.hpp"
@@ -21775,6 +21779,113 @@ TriangleMesh Plater::combine_mesh_fff(const ModelObject& mo, int instance_id, st
     else if (0 <= instance_id && instance_id < int(mo.instances.size()))
         mesh.transform(mo.instances[instance_id]->get_matrix(), true);
     return mesh;
+}
+
+void Plater::export_dlp_images()
+{
+    if (p->model.objects.empty()) {
+        GUI::show_error(this, _L("Load a model before exporting DLP images."));
+        return;
+    }
+
+    wxDialog dialog(this, wxID_ANY, _L("DLP Image Export Settings"), wxDefaultPosition, wxDefaultSize,
+                    wxDEFAULT_DIALOG_STYLE | wxRESIZE_BORDER);
+    auto *root = new wxBoxSizer(wxVERTICAL);
+    auto *grid = new wxFlexGridSizer(2, 8, 12);
+    grid->AddGrowableCol(1, 1);
+
+    auto add_field = [&](const wxString &label, const wxString &value) {
+        grid->Add(new wxStaticText(&dialog, wxID_ANY, label), 0, wxALIGN_CENTER_VERTICAL);
+        auto *field = new wxTextCtrl(&dialog, wxID_ANY, value);
+        grid->Add(field, 1, wxEXPAND);
+        return field;
+    };
+
+    wxTextCtrl *width_px       = add_field(_L("Resolution width (px)"), "1920");
+    wxTextCtrl *height_px      = add_field(_L("Resolution height (px)"), "1080");
+    wxTextCtrl *build_width    = add_field(_L("Build width (mm)"), "120");
+    wxTextCtrl *build_height   = add_field(_L("Build height (mm)"), "67.5");
+    wxTextCtrl *layer_height   = add_field(_L("Layer height (mm)"), "0.05");
+    wxTextCtrl *exposure       = add_field(_L("Exposure time (s)"), "2.0");
+    wxTextCtrl *initial_layers = add_field(_L("Initial layer count"), "5");
+    wxTextCtrl *initial_expose = add_field(_L("Initial exposure time (s)"), "20.0");
+
+    auto *mirror_x = new wxCheckBox(&dialog, wxID_ANY, _L("Mirror X"));
+    auto *mirror_y = new wxCheckBox(&dialog, wxID_ANY, _L("Mirror Y"));
+    auto *mirror_row = new wxBoxSizer(wxHORIZONTAL);
+    mirror_row->Add(mirror_x, 0, wxRIGHT, 20);
+    mirror_row->Add(mirror_y, 0);
+
+    root->Add(grid, 1, wxEXPAND | wxALL, 15);
+    root->Add(mirror_row, 0, wxLEFT | wxRIGHT | wxBOTTOM, 15);
+    root->Add(dialog.CreateSeparatedButtonSizer(wxOK | wxCANCEL), 0, wxEXPAND | wxALL, 10);
+    dialog.SetSizerAndFit(root);
+    dialog.SetMinSize(dialog.GetSize());
+    if (dialog.ShowModal() != wxID_OK)
+        return;
+
+    unsigned long width = 0, height = 0, bottom_count = 0;
+    double bed_width = 0.0, bed_height = 0.0, layer = 0.0, exposure_s = 0.0, bottom_exposure_s = 0.0;
+    const bool valid = width_px->GetValue().ToULong(&width) && height_px->GetValue().ToULong(&height) &&
+        initial_layers->GetValue().ToULong(&bottom_count) && build_width->GetValue().ToDouble(&bed_width) &&
+        build_height->GetValue().ToDouble(&bed_height) && layer_height->GetValue().ToDouble(&layer) &&
+        exposure->GetValue().ToDouble(&exposure_s) && initial_expose->GetValue().ToDouble(&bottom_exposure_s) &&
+        width > 0 && height > 0 && bed_width > 0.0 && bed_height > 0.0 && layer > 0.0 && exposure_s > 0.0 &&
+        bottom_exposure_s > 0.0;
+    if (!valid) {
+        GUI::show_error(this, _L("DLP settings must contain positive numeric values."));
+        return;
+    }
+
+    wxDirDialog output_dialog(this, _L("Choose a DLP image output directory"),
+                              from_u8(wxGetApp().app_config->get_last_dir()),
+                              wxDD_DEFAULT_STYLE | wxDD_DIR_MUST_EXIST | wxDD_NEW_DIR_BUTTON);
+    if (output_dialog.ShowModal() != wxID_OK)
+        return;
+
+    try {
+        const boost::filesystem::path output_root(into_u8(output_dialog.GetPath()));
+        boost::filesystem::path output_path = output_root / "DLP_Output";
+        for (unsigned int suffix = 2; boost::filesystem::exists(output_path); ++suffix)
+            output_path = output_root / ("DLP_Output_" + std::to_string(suffix));
+
+        p->background_process.stop();
+        const Model model_snapshot = p->model;
+
+        dlp::PrinterConfig printer {{static_cast<uint32_t>(width), static_cast<uint32_t>(height)},
+                                    bed_width, bed_height};
+        printer.mirror_x = mirror_x->GetValue();
+        printer.mirror_y = mirror_y->GetValue();
+
+        dlp::ProcessConfig process;
+        process.layer_height_mm = layer;
+        process.exposure_time_s = exposure_s;
+        process.initial_layer_count = static_cast<uint32_t>(bottom_count);
+        process.initial_exposure_time_s = bottom_exposure_s;
+
+        dlp::ExecutionConfig execution;
+        execution.placement = dlp::PlacementMode::CenterOnBuildArea;
+        execution.output.write_preview = true;
+        execution.output.write_manifest = false;
+        execution.output.write_viewer = false;
+
+        wxProgressDialog progress(_L("DLP Image Export"), _L("Preparing DLP layers..."), 100, this,
+                                  wxPD_APP_MODAL | wxPD_AUTO_HIDE | wxPD_SMOOTH);
+        const dlp::ExportResult result = dlp::export_directory(
+            model_snapshot, printer, process, output_path.string(), execution, {},
+            [&](double value, const std::string &message) {
+                const int percent = std::clamp(static_cast<int>(std::lround(value * 100.0)), 0, 100);
+                progress.Update(percent, from_u8(message));
+            });
+
+        MessageDialog done(this,
+            wxString::Format(_L("DLP export completed. %zu layer images were written to:\n%s"),
+                             result.layer_count, from_u8(output_path.string())),
+            _L("DLP Image Export"), wxOK | wxICON_INFORMATION);
+        done.ShowModal();
+    } catch (const std::exception &e) {
+        GUI::show_error(this, from_u8(e.what()));
+    }
 }
 
 // BBS export with/without boolean, however, stil merge mesh

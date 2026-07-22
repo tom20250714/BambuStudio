@@ -13,7 +13,17 @@ else()
 endif()
 
 if(WIN32)
-    set(_conf_cmd perl Configure )
+    unset(OPENSSL_PERL_EXECUTABLE CACHE)
+    find_program(OPENSSL_PERL_EXECUTABLE
+        NAMES perl
+        HINTS
+            "C:/Strawberry/perl/bin"
+        NO_DEFAULT_PATH
+    )
+    if(NOT OPENSSL_PERL_EXECUTABLE)
+        message(FATAL_ERROR "Native Windows Perl is required to configure OpenSSL. Install Strawberry Perl.")
+    endif()
+    set(_conf_cmd "${OPENSSL_PERL_EXECUTABLE}" Configure)
     set(_cross_comp_prefix_line "")
     set(_make_cmd nmake)
     set(_install_cmd nmake install_sw )

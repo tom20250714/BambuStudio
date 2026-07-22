@@ -8,6 +8,7 @@ bambustudio_add_cmake_project(
         -DTBB_BUILD_SHARED=OFF
         -DTBB_BUILD_TESTS=OFF
         -DTBB_TEST=OFF
+        -DTBB_DISABLE_HWLOC_AUTOMATIC_SEARCH=ON
         -DCMAKE_POSITION_INDEPENDENT_CODE=ON
         -DCMAKE_DEBUG_POSTFIX=_debug
 )
