@@ -104,6 +104,8 @@ protected:
     wxBoxSizer *create_step_switch_item();
     //Create Printer Page1
     void        create_printer_page1(wxWindow *parent);
+    wxBoxSizer *create_technology_item(wxWindow *parent);
+    void        create_dlp_printer_panel(wxWindow *parent);
     wxBoxSizer *create_type_item(wxWindow *parent);
     wxBoxSizer *create_printer_item(wxWindow *parent);
     wxBoxSizer *create_nozzle_diameter_item(wxWindow *parent);
@@ -137,6 +139,10 @@ protected:
     bool          save_printable_area_config(Preset *preset);
     bool          check_printable_area();
     bool          validate_input_valid();
+    bool          validate_dlp_input();
+    bool          create_dlp_presets();
+    bool          is_dlp_selected() const;
+    void          update_technology_page();
     void          load_texture();
     void          load_model_stl();
     bool          load_system_and_user_presets_with_curr_model(PresetBundle &temp_preset_bundle, bool just_template = false);
@@ -163,7 +169,15 @@ private:
         wxString base_curr_printer;
     };
 
+    struct PrinterTechnologyType
+    {
+        wxString fdm;
+        wxString dlp;
+    };
+
     CreatePrinterType                                  m_create_type;
+    PrinterTechnologyType                              m_technology_type;
+    std::vector<std::pair<RadioBox *, wxString>>       m_technology_btns;
     std::vector<std::pair<RadioBox *, wxString>>       m_create_type_btns;
     std::vector<std::pair<RadioBox *, wxString>>       m_create_presets_btns;
     std::vector<std::pair<::CheckBox *, Preset *>>           m_filament_preset;
@@ -210,6 +224,15 @@ private:
     wxPanel *                                          m_preset_template_panel          = nullptr;
     wxBoxSizer *                                       m_filament_sizer                 = nullptr;
     wxPanel *                                          m_printer_info_panel             = nullptr;
+    wxPanel *                                          m_fdm_printer_panel              = nullptr;
+    wxPanel *                                          m_dlp_printer_panel              = nullptr;
+    wxTextCtrl *                                       m_dlp_model_input                = nullptr;
+    TextInput *                                        m_dlp_size_x_input               = nullptr;
+    TextInput *                                        m_dlp_size_y_input               = nullptr;
+    TextInput *                                        m_dlp_size_z_input               = nullptr;
+    TextInput *                                        m_dlp_pixels_x_input             = nullptr;
+    TextInput *                                        m_dlp_pixels_y_input             = nullptr;
+    TextInput *                                        m_dlp_layer_height_input         = nullptr;
     wxBoxSizer *                                       m_page1_sizer                    = nullptr;
     wxBoxSizer *                                       m_printer_info_sizer             = nullptr;
     wxBoxSizer *                                       m_page2_sizer                    = nullptr;

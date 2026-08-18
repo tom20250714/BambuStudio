@@ -518,8 +518,23 @@ void ParamsPanel::rebuild_panels()
     create_layout();
 }
 
+void ParamsPanel::reload_for_printer_technology()
+{
+    // The process/material slots are shared by FFF and SLA tabs. Re-resolve
+    // them after a printer technology switch and make the matching process tab
+    // active, otherwise the sidebar keeps displaying the FFF "Default Setting".
+    m_current_tab = nullptr;
+    rebuild_panels();
+    set_active_tab(m_tab_print);
+    Layout();
+}
+
 void ParamsPanel::refresh_tabs()
 {
+    // Do not retain pointers belonging to the previously selected technology.
+    m_tab_print    = nullptr;
+    m_tab_filament = nullptr;
+
     auto& tabs_list = wxGetApp().tabs_list;
     auto print_tech = wxGetApp().preset_bundle->printers.get_selected_preset().printer_technology();
     for (auto tab : tabs_list)

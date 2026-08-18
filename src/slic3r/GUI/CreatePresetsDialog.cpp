@@ -1492,6 +1492,8 @@ CreatePrinterPresetDialog::CreatePrinterPresetDialog(wxWindow *parent)
     m_create_type.create_nozzle     = _L("Create Nozzle for Existing Printer");
     m_create_type.base_template     = _L("Create from Template");
     m_create_type.base_curr_printer = _L("Create Based on Current Printer");
+    m_technology_type.fdm           = "FDM";
+    m_technology_type.dlp           = "DLP";
     this->SetBackgroundColour(*wxWHITE);
     SetSizeHints(wxDefaultSize, wxDefaultSize);
 
@@ -1523,6 +1525,7 @@ CreatePrinterPresetDialog::CreatePrinterPresetDialog(wxWindow *parent)
     m_main_sizer->Add(page_sizer, 0, wxEXPAND | wxRIGHT, FromDIP(10));
     select_curr_radiobox(m_create_type_btns, 0);
     select_curr_radiobox(m_create_presets_btns, 0);
+    select_curr_radiobox(m_technology_btns, 0);
 
     m_main_sizer->Add(0, 0, 0, wxTOP, FromDIP(10));
 
@@ -1610,10 +1613,15 @@ void CreatePrinterPresetDialog::create_printer_page1(wxWindow *parent)
 
     m_page1_sizer = new wxBoxSizer(wxVERTICAL);
 
-    m_page1_sizer->Add(create_type_item(parent), 0, wxEXPAND | wxLEFT | wxRIGHT | wxBOTTOM, FromDIP(5));
-    m_page1_sizer->Add(create_printer_item(parent), 0, wxEXPAND | wxLEFT | wxRIGHT | wxBOTTOM, FromDIP(5));
-    m_page1_sizer->Add(create_nozzle_diameter_item(parent), 0, wxEXPAND | wxLEFT | wxRIGHT | wxBOTTOM, FromDIP(5));
-    m_printer_info_panel = new wxPanel(parent);
+    m_page1_sizer->Add(create_technology_item(parent), 0, wxEXPAND | wxLEFT | wxRIGHT | wxBOTTOM, FromDIP(5));
+
+    m_fdm_printer_panel = new wxPanel(parent);
+    m_fdm_printer_panel->SetBackgroundColour(*wxWHITE);
+    auto fdm_sizer = new wxBoxSizer(wxVERTICAL);
+    fdm_sizer->Add(create_type_item(m_fdm_printer_panel), 0, wxEXPAND | wxLEFT | wxRIGHT | wxBOTTOM, FromDIP(5));
+    fdm_sizer->Add(create_printer_item(m_fdm_printer_panel), 0, wxEXPAND | wxLEFT | wxRIGHT | wxBOTTOM, FromDIP(5));
+    fdm_sizer->Add(create_nozzle_diameter_item(m_fdm_printer_panel), 0, wxEXPAND | wxLEFT | wxRIGHT | wxBOTTOM, FromDIP(5));
+    m_printer_info_panel = new wxPanel(m_fdm_printer_panel);
     m_printer_info_panel->SetBackgroundColour(*wxWHITE);
     m_printer_info_sizer = new wxBoxSizer(wxVERTICAL);
     m_printer_info_sizer->Add(create_bed_shape_item(m_printer_info_panel), 0, wxEXPAND | wxLEFT | wxRIGHT | wxBOTTOM, FromDIP(5));
@@ -1623,13 +1631,90 @@ void CreatePrinterPresetDialog::create_printer_page1(wxWindow *parent)
     m_printer_info_sizer->Add(create_hot_bed_svg_item(m_printer_info_panel), 0, wxEXPAND | wxLEFT | wxRIGHT | wxBOTTOM, FromDIP(5));
     m_printer_info_sizer->Add(create_max_print_height_item(m_printer_info_panel), 0, wxEXPAND | wxLEFT | wxRIGHT | wxBOTTOM, FromDIP(5));
     m_printer_info_panel->SetSizer(m_printer_info_sizer);
-    m_page1_sizer->Add(m_printer_info_panel, 0, wxEXPAND, 0);
+    fdm_sizer->Add(m_printer_info_panel, 0, wxEXPAND, 0);
+    m_fdm_printer_panel->SetSizer(fdm_sizer);
+    m_page1_sizer->Add(m_fdm_printer_panel, 0, wxEXPAND, 0);
+
+    m_dlp_printer_panel = new wxPanel(parent);
+    m_dlp_printer_panel->SetBackgroundColour(*wxWHITE);
+    create_dlp_printer_panel(m_dlp_printer_panel);
+    m_page1_sizer->Add(m_dlp_printer_panel, 0, wxEXPAND, 0);
+    m_dlp_printer_panel->Hide();
     m_page1_sizer->Add(create_page1_btns_item(parent), 0, wxEXPAND | wxLEFT | wxRIGHT | wxBOTTOM, FromDIP(5));
 
     parent->SetSizerAndFit(m_page1_sizer);
     Layout();
 
     wxGetApp().UpdateDlgDarkUI(this);
+}
+
+wxBoxSizer *CreatePrinterPresetDialog::create_technology_item(wxWindow *parent)
+{
+    auto horizontal_sizer = new wxBoxSizer(wxHORIZONTAL);
+    auto label_sizer = new wxBoxSizer(wxVERTICAL);
+    label_sizer->Add(new wxStaticText(parent, wxID_ANY, _L("Printer Technology")), 0, wxEXPAND);
+    label_sizer->SetMinSize(OPTION_SIZE);
+    horizontal_sizer->Add(label_sizer, 0, wxEXPAND | wxALL | wxALIGN_CENTER_VERTICAL, FromDIP(10));
+
+    auto options = new wxBoxSizer(wxHORIZONTAL);
+    options->Add(create_radio_item(m_technology_type.fdm, parent, wxEmptyString, m_technology_btns), 0, wxRIGHT, FromDIP(20));
+    options->Add(create_radio_item(m_technology_type.dlp, parent, wxEmptyString, m_technology_btns), 0);
+    horizontal_sizer->Add(options, 0, wxEXPAND | wxALL | wxALIGN_CENTER_VERTICAL, FromDIP(10));
+    return horizontal_sizer;
+}
+
+void CreatePrinterPresetDialog::create_dlp_printer_panel(wxWindow *parent)
+{
+    auto sizer = new wxBoxSizer(wxVERTICAL);
+    auto add_row = [this, parent, sizer](const wxString &label, wxSizer *control) {
+        auto row = new wxBoxSizer(wxHORIZONTAL);
+        auto label_sizer = new wxBoxSizer(wxVERTICAL);
+        label_sizer->Add(new wxStaticText(parent, wxID_ANY, label), 0, wxEXPAND);
+        label_sizer->SetMinSize(OPTION_SIZE);
+        row->Add(label_sizer, 0, wxEXPAND | wxALL | wxALIGN_CENTER_VERTICAL, FromDIP(10));
+        row->Add(control, 0, wxEXPAND | wxALL | wxALIGN_CENTER_VERTICAL, FromDIP(10));
+        sizer->Add(row, 0, wxEXPAND | wxLEFT | wxRIGHT | wxBOTTOM, FromDIP(5));
+    };
+
+    m_dlp_model_input = new wxTextCtrl(parent, wxID_ANY, "", wxDefaultPosition, NAME_OPTION_COMBOBOX_SIZE);
+    m_dlp_model_input->SetHint(_L("Input Model Name"));
+    auto model_sizer = new wxBoxSizer(wxHORIZONTAL);
+    model_sizer->Add(m_dlp_model_input, 0);
+    add_row(_L("Model Name"), model_sizer);
+
+    auto build_size_row = [this, parent](TextInput *&x, TextInput *&y, TextInput *&z) {
+        auto row = new wxBoxSizer(wxHORIZONTAL);
+        wxTextValidator decimal_validator(wxFILTER_NUMERIC);
+        auto add = [&](const char *axis, TextInput *&input, const char *value) {
+            row->Add(new wxStaticText(parent, wxID_ANY, axis), 0, wxALIGN_CENTER_VERTICAL | wxRIGHT, FromDIP(5));
+            input = new TextInput(parent, value, "mm", wxEmptyString, wxDefaultPosition, PRINTER_SPACE_SIZE, wxTE_CENTRE | wxTE_PROCESS_ENTER);
+            input->GetTextCtrl()->SetValidator(decimal_validator);
+            row->Add(input, 0, wxRIGHT, FromDIP(10));
+        };
+        add("X", x, "120"); add("Y", y, "68"); add("Z", z, "150");
+        return row;
+    };
+    add_row(_L("Printable Space"), build_size_row(m_dlp_size_x_input, m_dlp_size_y_input, m_dlp_size_z_input));
+
+    auto pixel_row = new wxBoxSizer(wxHORIZONTAL);
+    wxTextValidator digit_validator(wxFILTER_DIGITS);
+    pixel_row->Add(new wxStaticText(parent, wxID_ANY, "X"), 0, wxALIGN_CENTER_VERTICAL | wxRIGHT, FromDIP(5));
+    m_dlp_pixels_x_input = new TextInput(parent, "2560", "px", wxEmptyString, wxDefaultPosition, PRINTER_SPACE_SIZE, wxTE_CENTRE | wxTE_PROCESS_ENTER);
+    m_dlp_pixels_x_input->GetTextCtrl()->SetValidator(digit_validator);
+    pixel_row->Add(m_dlp_pixels_x_input, 0, wxRIGHT, FromDIP(10));
+    pixel_row->Add(new wxStaticText(parent, wxID_ANY, "Y"), 0, wxALIGN_CENTER_VERTICAL | wxRIGHT, FromDIP(5));
+    m_dlp_pixels_y_input = new TextInput(parent, "1440", "px", wxEmptyString, wxDefaultPosition, PRINTER_SPACE_SIZE, wxTE_CENTRE | wxTE_PROCESS_ENTER);
+    m_dlp_pixels_y_input->GetTextCtrl()->SetValidator(digit_validator);
+    pixel_row->Add(m_dlp_pixels_y_input, 0);
+    add_row(_L("Display Resolution"), pixel_row);
+
+    m_dlp_layer_height_input = new TextInput(parent, "0.05", "mm", wxEmptyString, wxDefaultPosition, PRINTER_SPACE_SIZE, wxTE_CENTRE | wxTE_PROCESS_ENTER);
+    wxTextValidator decimal_validator(wxFILTER_NUMERIC);
+    m_dlp_layer_height_input->GetTextCtrl()->SetValidator(decimal_validator);
+    auto layer_sizer = new wxBoxSizer(wxHORIZONTAL);
+    layer_sizer->Add(m_dlp_layer_height_input, 0);
+    add_row(_L("Layer Thickness"), layer_sizer);
+    parent->SetSizer(sizer);
 }
 
 wxBoxSizer *CreatePrinterPresetDialog::create_type_item(wxWindow *parent)
@@ -2079,6 +2164,18 @@ wxBoxSizer *CreatePrinterPresetDialog::create_page1_btns_item(wxWindow *parent)
     bSizer_button->Add(m_button_OK, 0, wxRIGHT, FromDIP(10));
 
     m_button_OK->Bind(wxEVT_LEFT_DOWN, [this](wxMouseEvent &e) {
+        if (is_dlp_selected()) {
+            if (!validate_dlp_input())
+                return;
+            try {
+                if (create_dlp_presets())
+                    EndModal(wxID_OK);
+            } catch (const std::exception &exception) {
+                BOOST_LOG_TRIVIAL(error) << __FUNCTION__ << " failed to create DLP presets: " << exception.what();
+                show_error(this, _L("Failed to create DLP presets: ") + from_u8(exception.what()));
+            }
+            return;
+        }
         if (!validate_input_valid()) return;
         data_init();
         show_page2();
@@ -2505,7 +2602,12 @@ void CreatePrinterPresetDialog::select_curr_radiobox(std::vector<std::pair<Radio
             radiobox_list[i].first->SetValue(true);
             wxString curr_selected_type = radiobox_list[i].second;
             this->Freeze();
-            if (curr_selected_type == m_create_type.base_template) {
+            if (curr_selected_type == m_technology_type.fdm || curr_selected_type == m_technology_type.dlp) {
+                for (int technology_idx = 0; technology_idx < len; ++technology_idx)
+                    if (technology_idx != i)
+                        radiobox_list[technology_idx].first->SetValue(false);
+                update_technology_page();
+            } else if (curr_selected_type == m_create_type.base_template) {
                 if (m_printer_model->GetValue() == _L("Select Model")) {
                     m_filament_preset_template_sizer->Clear(true);
                     m_filament_preset.clear();
@@ -2559,6 +2661,104 @@ void CreatePrinterPresetDialog::select_curr_radiobox(std::vector<std::pair<Radio
     }
 
     update_preset_list_size();
+}
+
+bool CreatePrinterPresetDialog::is_dlp_selected() const
+{
+    for (const auto &item : m_technology_btns)
+        if (item.second == m_technology_type.dlp)
+            return item.first->GetValue();
+    return false;
+}
+
+void CreatePrinterPresetDialog::update_technology_page()
+{
+    if (!m_fdm_printer_panel || !m_dlp_printer_panel)
+        return;
+    const bool dlp = is_dlp_selected();
+    m_fdm_printer_panel->Show(!dlp);
+    m_dlp_printer_panel->Show(dlp);
+    m_page1->SetSizerAndFit(m_page1_sizer);
+    Layout();
+    Fit();
+    Refresh();
+}
+
+bool CreatePrinterPresetDialog::validate_dlp_input()
+{
+    std::string model = remove_special_key(into_u8(m_dlp_model_input->GetValue()));
+    boost::algorithm::trim(model);
+    double x = 0., y = 0., z = 0., layer_height = 0.;
+    long pixels_x = 0, pixels_y = 0;
+    const bool valid = !model.empty()
+        && m_dlp_size_x_input->GetTextCtrl()->GetValue().ToDouble(&x) && x > 0.
+        && m_dlp_size_y_input->GetTextCtrl()->GetValue().ToDouble(&y) && y > 0.
+        && m_dlp_size_z_input->GetTextCtrl()->GetValue().ToDouble(&z) && z > 0.
+        && m_dlp_pixels_x_input->GetTextCtrl()->GetValue().ToLong(&pixels_x) && pixels_x >= 100
+        && m_dlp_pixels_y_input->GetTextCtrl()->GetValue().ToLong(&pixels_y) && pixels_y >= 100
+        && m_dlp_layer_height_input->GetTextCtrl()->GetValue().ToDouble(&layer_height) && layer_height > 0. && layer_height <= z;
+    if (!valid) {
+        MessageDialog dlg(this, _L("Please enter a model name, positive printable dimensions, a display resolution of at least 100 pixels, and a valid layer thickness."),
+                          wxString(SLIC3R_APP_FULL_NAME) + " - " + _L("Info"), wxYES | wxYES_DEFAULT | wxCENTRE);
+        dlg.ShowModal();
+    }
+    return valid;
+}
+
+bool CreatePrinterPresetDialog::create_dlp_presets()
+{
+    PresetBundle *preset_bundle = wxGetApp().preset_bundle;
+    std::string model = remove_special_key(into_u8(m_dlp_model_input->GetValue()));
+    boost::algorithm::trim(model);
+    const std::string printer_name = model + " DLP";
+    const std::string print_name = model + " " + into_u8(m_dlp_layer_height_input->GetTextCtrl()->GetValue()) + " mm DLP";
+
+    if (preset_bundle->printers.find_preset(printer_name)) {
+        MessageDialog dlg(this, _L("A printer preset with the same name already exists. Do you want to overwrite it?"),
+                          wxString(SLIC3R_APP_FULL_NAME) + " - " + _L("Info"), wxYES | wxCANCEL | wxYES_DEFAULT | wxCENTRE);
+        if (dlg.ShowModal() != wxID_YES)
+            return false;
+    }
+
+    double x = 0., y = 0., z = 0., layer_height = 0.;
+    long pixels_x = 0, pixels_y = 0;
+    m_dlp_size_x_input->GetTextCtrl()->GetValue().ToDouble(&x);
+    m_dlp_size_y_input->GetTextCtrl()->GetValue().ToDouble(&y);
+    m_dlp_size_z_input->GetTextCtrl()->GetValue().ToDouble(&z);
+    m_dlp_pixels_x_input->GetTextCtrl()->GetValue().ToLong(&pixels_x);
+    m_dlp_pixels_y_input->GetTextCtrl()->GetValue().ToLong(&pixels_y);
+    m_dlp_layer_height_input->GetTextCtrl()->GetValue().ToDouble(&layer_height);
+
+    Preset printer_preset(Preset::TYPE_PRINTER, printer_name, false);
+    printer_preset.config.apply_only(SLAFullPrintConfig::defaults(), Preset::sla_printer_options());
+    printer_preset.config.optptr("printer_settings_id", true);
+    printer_preset.config.optptr("printer_model", true);
+    printer_preset.config.optptr("printer_variant", true);
+    printer_preset.config.optptr("default_sla_print_profile", true);
+    printer_preset.config.optptr("default_sla_material_profile", true);
+    printer_preset.inherits();
+    if (auto technology = printer_preset.config.option<ConfigOptionEnumGeneric>("printer_technology", true))
+        technology->value = ptSLA;
+    printer_preset.config.set("printer_model", model);
+    printer_preset.config.set("printer_variant", "DLP");
+    printer_preset.config.set("display_width", x);
+    printer_preset.config.set("display_height", y);
+    printer_preset.config.set("display_pixels_x", int(pixels_x));
+    printer_preset.config.set("display_pixels_y", int(pixels_y));
+    if (auto printable_area = printer_preset.config.option<ConfigOptionPoints>("printable_area", true))
+        printable_area->values = {{0., 0.}, {x, 0.}, {x, y}, {0., y}};
+    if (printer_preset.config.has("printable_height"))
+        printer_preset.config.set("printable_height", z);
+    preset_bundle->printers.save_current_preset(printer_name, true, false, &printer_preset);
+
+    Preset sla_print_preset(preset_bundle->sla_prints.default_preset());
+    sla_print_preset.config.set("layer_height", layer_height);
+    if (auto compatible = sla_print_preset.config.option<ConfigOptionStrings>("compatible_printers", true))
+        compatible->values = {printer_name};
+    preset_bundle->sla_prints.save_current_preset(print_name, true, false, &sla_print_preset);
+    preset_bundle->printers.select_preset_by_name(printer_name, true);
+    preset_bundle->update_compatible(PresetSelectCompatibleType::Always);
+    return true;
 }
 
 void CreatePrinterPresetDialog::create_printer_page2(wxWindow *parent)

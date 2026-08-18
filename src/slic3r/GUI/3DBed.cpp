@@ -162,7 +162,12 @@ void Bed3D::Axes::render() const
     };
 
     if (!m_arrow.is_initialized())
-        const_cast<GLModel*>(&m_arrow)->init_from(stilized_arrow(16, DefaultTipRadius, DefaultTipLength, DefaultStemRadius, m_stem_length));
+        const_cast<GLModel*>(&m_arrow)->init_from(
+            stilized_arrow(16,
+                           DefaultTipRadius * m_size_scale,
+                           DefaultTipLength * m_size_scale,
+                           DefaultStemRadius * m_size_scale,
+                           m_stem_length));
 
     const auto& shader = wxGetApp().get_shader("gouraud_light");
     if (shader == nullptr)
@@ -274,7 +279,12 @@ bool Bed3D::set_shape(const Pointfs& printable_area, const double printable_heig
 
     // Set the origin and size for rendering the coordinate system axes.
     m_axes.set_origin({ 0.0, 0.0, static_cast<double>(GROUND_Z) });
-    m_axes.set_stem_length(0.1f * static_cast<float>(m_build_volume.bounding_volume().max_size()));
+    // Size the visual axes from the XY build surface only. Using the 3D
+    // build-volume maximum also included printer height, which kept the axes
+    // full-sized on compact DLP screens with a relatively tall Z range.
+    const Vec2d bed_size = get_extents(m_bed_shape).size();
+    const double bed_reference = std::max(bed_size.x(), bed_size.y());
+    m_axes.set_stem_length(0.1f * static_cast<float>(bed_reference));
 
     // Let the calee to update the UI.
     return true;

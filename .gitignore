@@ -10,6 +10,11 @@ blib
 xs/buildtmp
 *.o
 *.log
+*.exe
+*.pdb
+*.ilk
+*.dmp
+windbg*.txt
 MANIFEST.bak
 xs/MANIFEST.bak
 xs/assertlib*

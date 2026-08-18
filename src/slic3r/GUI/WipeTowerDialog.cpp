@@ -20,7 +20,12 @@ static const float g_max_flush_multiplier = 3.f;
 
 bool is_flush_config_modified()
 {
-    const auto &project_config    = wxGetApp().preset_bundle->project_config;
+    const auto &preset_bundle = wxGetApp().preset_bundle;
+    if (preset_bundle == nullptr ||
+        preset_bundle->printers.get_edited_preset().printer_technology() != ptFFF)
+        return false;
+
+    const auto &project_config    = preset_bundle->project_config;
     const std::vector<double> &config_matrix     = (project_config.option<ConfigOptionFloats>("flush_volumes_matrix"))->values;
     bool                       use_fast_multiplier = project_config.option<ConfigOptionEnum<PrimeVolumeMode>>("prime_volume_mode")->value == PrimeVolumeMode::pvmFast;
     const std::vector<double> &config_multiplier   = (project_config.option<ConfigOptionFloats>(use_fast_multiplier ? "flush_multiplier_fast" : "flush_multiplier"))->values;

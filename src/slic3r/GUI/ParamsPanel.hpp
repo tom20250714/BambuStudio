@@ -147,6 +147,7 @@ class ParamsPanel : public wxPanel
 		~ParamsPanel();
 
         void rebuild_panels();
+        void reload_for_printer_technology();
         void create_layout();
         //clear the right page
         void clear_page();

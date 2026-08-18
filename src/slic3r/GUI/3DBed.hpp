@@ -9,6 +9,7 @@
 
 #include <tuple>
 #include <array>
+#include <algorithm>
 
 namespace Slic3r {
 namespace GUI {
@@ -60,6 +61,7 @@ public:
     private:
         Vec3d m_origin{ Vec3d::Zero() };
         float m_stem_length{ DefaultStemLength };
+        float m_size_scale{ 1.0f };
         GLModel m_arrow;
 
     public:
@@ -67,9 +69,12 @@ public:
         void set_origin(const Vec3d& origin) { m_origin = origin; }
         void set_stem_length(float length) {
             m_stem_length = length;
+            // The old arrow used fixed 5 mm tips and fixed radii. On compact
+            // DLP build areas those parts visually dominated the whole bed.
+            m_size_scale = std::clamp(length / (0.1f * 256.0f), 0.25f, 1.0f);
             m_arrow.reset();
         }
-        float get_total_length() const { return m_stem_length + DefaultTipLength; }
+        float get_total_length() const { return m_stem_length + DefaultTipLength * m_size_scale; }
         void render() const;
     };
 

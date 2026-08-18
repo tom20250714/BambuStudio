@@ -3930,6 +3930,18 @@ void GLCanvas3D::reload_scene(bool refresh_immediately, bool force_full_scene_re
             const bool fullyOut = (state == ModelInstanceEPrintVolumeState::ModelInstancePVS_Fully_Outside);
            // const bool objectLimited = (state == ModelInstanceEPrintVolumeState::ModelInstancePVS_Limited);
 
+            const bool is_fff = wxGetApp().preset_bundle != nullptr &&
+                wxGetApp().preset_bundle->printers.get_edited_preset().printer_technology() == ptFFF;
+            if (!is_fff) {
+                // All checks below inspect FFF filament, nozzle and wipe-tower
+                // options. SLA/DLP only needs the geometric build-volume test.
+                const bool model_fits = contained_min_one && !m_model->objects.empty() && !partlyOut;
+                post_event(Event<bool>(EVT_GLCANVAS_ENABLE_ACTION_BUTTONS, model_fits));
+                ppl.get_curr_plate()->update_slice_ready_status(model_fits);
+                _set_warning_notification(EWarning::PrimeTowerOutside, false);
+                _set_warning_notification(EWarning::FlushingVolumeZero, false);
+                _set_warning_notification(EWarning::MultiFilaNoWipeTower, false);
+            } else {
             PartPlate *cur_plate  = wxGetApp().plater()->get_partplate_list().get_curr_plate();
             bool show_read_wipe_tower = cur_plate->fff_print()->is_step_done(psWipeTower);
             bool       wipe_tower_outside   = m_volumes.check_wipe_tower_outside_state(m_bed.build_volume(), wxGetApp().plater()->get_partplate_list().get_curr_plate_index());
@@ -3984,6 +3996,7 @@ void GLCanvas3D::reload_scene(bool refresh_immediately, bool force_full_scene_re
 
             bool single_extruder_mixed_risk = cur_plate->check_single_extruder_mixed_filament_risk(full_config_temp, get_single_extruder_mixed_filament_warning_text());
             _set_warning_notification(EWarning::SingleExtruderMixedFilament, single_extruder_mixed_risk);
+            }
         }
         else {
             _set_warning_notification(EWarning::ObjectOutside, false);

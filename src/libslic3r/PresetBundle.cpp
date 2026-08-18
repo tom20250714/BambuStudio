@@ -402,19 +402,19 @@ PresetBundle::PresetBundle()
     this->sla_prints.default_preset().compatible_printers_condition();
     this->sla_prints.default_preset().inherits();
 
-    //this->printers.add_default_preset(Preset::sla_printer_options(), static_cast<const SLAMaterialConfig &>(SLAFullPrintConfig::defaults()), "- default SLA -");
-    //this->printers.preset(1).printer_technology_ref() = ptSLA;
-    for (size_t i = 0; i < 1; ++i) {
+    this->printers.add_default_preset(Preset::sla_printer_options(), static_cast<const SLAPrinterConfig &>(SLAFullPrintConfig::defaults()), "- default DLP -");
+    this->printers.default_preset(1).printer_technology_ref() = ptSLA;
+    for (size_t i = 0; i < 2; ++i) {
         // The following ugly switch is to avoid printers.preset(0) to return the edited instance, as the 0th default is the current one.
         Preset &preset = this->printers.default_preset(i);
         for (const char *key : {"printer_settings_id", "printer_model", "printer_variant","thumbnail_size"}) preset.config.optptr(key, true);
-        //if (i == 0) {
+        if (i == 0) {
             preset.config.optptr("default_print_profile", true);
             preset.config.option<ConfigOptionStrings>("default_filament_profile", true);
-        //} else {
-        //    preset.config.optptr("default_sla_print_profile", true);
-        //    preset.config.optptr("default_sla_material_profile", true);
-        //}
+        } else {
+            preset.config.optptr("default_sla_print_profile", true);
+            preset.config.optptr("default_sla_material_profile", true);
+        }
         // default_sla_material_profile
         preset.inherits();
     }
@@ -2215,26 +2215,35 @@ void PresetBundle::load_selections(AppConfig &config, const PresetPreferences& p
     }
 
     const Preset& current_printer = printers.get_selected_preset();
-    const Preset* base_printer = printers.get_preset_base(current_printer);
-    bool use_default_nozzle_volume_type = true;
-    if (base_printer) {
-        std::string prev_nozzle_volume_type = config.get_nozzle_volume_types_from_config(base_printer->name);
-        if (!prev_nozzle_volume_type.empty()) {
-            ConfigOptionEnumsGeneric* nozzle_volume_type_option = project_config.option<ConfigOptionEnumsGeneric>("nozzle_volume_type");
-            if (nozzle_volume_type_option->deserialize(prev_nozzle_volume_type)) {
+    // Nozzle volume is an FFF-only setting. SLA/DLP printer presets do not
+    // contain default_nozzle_volume_type, so attempting to restore it during
+    // startup would dereference a missing option when DLP was last selected.
+    if (current_printer.printer_technology() == ptFFF) {
+        const Preset* base_printer = printers.get_preset_base(current_printer);
+        bool use_default_nozzle_volume_type = true;
+        if (base_printer) {
+            std::string prev_nozzle_volume_type = config.get_nozzle_volume_types_from_config(base_printer->name);
+            if (!prev_nozzle_volume_type.empty()) {
+                ConfigOptionEnumsGeneric* nozzle_volume_type_option = project_config.option<ConfigOptionEnumsGeneric>("nozzle_volume_type");
+                if (nozzle_volume_type_option != nullptr && nozzle_volume_type_option->deserialize(prev_nozzle_volume_type)) {
+                    for (size_t eid = 0; eid < nozzle_volume_type_option->size(); ++eid) {
+                        extruder_nozzle_stat.on_volume_type_switch(eid, NozzleVolumeType(nozzle_volume_type_option->values[eid]));
+                    }
+                    use_default_nozzle_volume_type = false;
+                }
+            }
+        }
+
+        if (use_default_nozzle_volume_type) {
+            auto *nozzle_volume_type_option = project_config.option<ConfigOptionEnumsGeneric>("nozzle_volume_type");
+            const auto *default_nozzle_volume_type =
+                current_printer.config.option<ConfigOptionEnumsGeneric>("default_nozzle_volume_type");
+            if (nozzle_volume_type_option != nullptr && default_nozzle_volume_type != nullptr) {
+                nozzle_volume_type_option->values = default_nozzle_volume_type->values;
                 for (size_t eid = 0; eid < nozzle_volume_type_option->size(); ++eid) {
                     extruder_nozzle_stat.on_volume_type_switch(eid, NozzleVolumeType(nozzle_volume_type_option->values[eid]));
                 }
-                use_default_nozzle_volume_type = false;
             }
-        }
-    }
-
-    if (use_default_nozzle_volume_type) {
-        auto nozzle_volume_type_option = project_config.option<ConfigOptionEnumsGeneric>("nozzle_volume_type");
-        nozzle_volume_type_option->values = current_printer.config.option<ConfigOptionEnumsGeneric>("default_nozzle_volume_type")->values;
-        for (size_t eid = 0; eid < nozzle_volume_type_option->size(); ++eid) {
-            extruder_nozzle_stat.on_volume_type_switch(eid, NozzleVolumeType(nozzle_volume_type_option->values[eid]));
         }
     }
 
@@ -3159,7 +3168,12 @@ int PresetBundle::get_printer_extruder_count() const
 {
     const Preset& printer_preset = this->printers.get_edited_preset();
 
-    int count = printer_preset.config.option<ConfigOptionFloatsNullable>("nozzle_diameter")->values.size();
+    // SLA/DLP printer presets have no "nozzle_diameter" option (single vat, no extruders).
+    if (printer_preset.printer_technology() == ptSLA)
+        return 1;
+
+    auto nozzle_diameter = printer_preset.config.option<ConfigOptionFloatsNullable>("nozzle_diameter");
+    int count = nozzle_diameter ? (int)nozzle_diameter->values.size() : 1;
 
     return count;
 }

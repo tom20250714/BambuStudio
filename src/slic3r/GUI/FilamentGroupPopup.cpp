@@ -22,9 +22,13 @@ static const wxColour BackGroundColor = wxColour("#FFFFFF");
 static bool should_pop_up()
 {
     const auto &preset_bundle    = wxGetApp().preset_bundle;
+    if (preset_bundle == nullptr ||
+        preset_bundle->printers.get_edited_preset().printer_technology() != ptFFF)
+        return false;
+
     const auto &full_config      = preset_bundle->full_config();
     const auto  nozzle_diameters = full_config.option<ConfigOptionFloatsNullable>("nozzle_diameter");
-    return nozzle_diameters->size() > 1;
+    return nozzle_diameters != nullptr && nozzle_diameters->size() > 1;
 }
 
 static FilamentMapMode get_prefered_map_mode()

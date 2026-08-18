@@ -512,6 +512,7 @@ public:
     void send_gcode_finish(wxString name);
     void export_core_3mf();
     static TriangleMesh combine_mesh_fff(const ModelObject& mo, int instance_id, std::function<void(const std::string&)> notify_func = {});
+    bool preview_dlp_images();
     void export_dlp_images();
     void export_stl(bool extended = false, bool selection_only = false, bool multi_stls = false);
     //BBS: remove amf

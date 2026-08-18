@@ -16,6 +16,7 @@
 
 #include <boost/log/trivial.hpp>
 
+#include <tbb/enumerable_thread_specific.h>
 #include <tbb/parallel_for.h>
 
 #ifndef NDEBUG
@@ -481,8 +482,7 @@ void slice_facet_at_zs(
     const Vec3i                                      &edge_ids,
     // Scaled or unscaled zs. If vertices have their zs scaled or transform_vertex_fn scales them, then zs have to be scaled as well.
     const std::vector<float>                         &zs,
-    std::vector<IntersectionLines>                   &lines,
-    std::array<std::mutex, 64>                       &lines_mutex)
+    std::vector<IntersectionLines>                   &lines)
 {
     stl_vertex vertices[3] { transform_vertex_fn(mesh_vertices[indices(0)]), transform_vertex_fn(mesh_vertices[indices(1)]), transform_vertex_fn(mesh_vertices[indices(2)]) };
 
@@ -501,7 +501,6 @@ void slice_facet_at_zs(
         if (min_z != max_z && slice_facet(*it, vertices, indices, edge_ids, idx_vertex_lowest, false, il) == FacetSliceType::Slicing) {
             assert(il.edge_type != IntersectionLine::FacetEdgeType::Horizontal);
             size_t slice_id = it - zs.begin();
-            boost::lock_guard<std::mutex> l(lines_mutex[slice_id % lines_mutex.size()]);
             lines[slice_id].emplace_back(il);
         }
     }
@@ -516,18 +515,37 @@ static inline std::vector<IntersectionLines> slice_make_lines(
     const std::vector<float>                        &zs,
     const ThrowOnCancel                              throw_on_cancel_fn)
 {
-    std::vector<IntersectionLines>  lines(zs.size(), IntersectionLines());
-    std::array<std::mutex, 64>      lines_mutex;
+    // Each worker collects its intersections without synchronizing with other
+    // workers. The previous shared vectors required a mutex acquisition for
+    // every triangle/layer intersection, which heavily serialized slicing of
+    // detailed meshes.
+    tbb::enumerable_thread_specific<std::vector<IntersectionLines>> thread_lines(
+        [&zs]() { return std::vector<IntersectionLines>(zs.size()); });
     tbb::parallel_for(
         tbb::blocked_range<int>(0, int(indices.size())),
-        [&vertices, &transform_vertex_fn, &indices, &face_edge_ids, &zs, &lines, &lines_mutex, throw_on_cancel_fn](const tbb::blocked_range<int> &range) {
+        [&vertices, &transform_vertex_fn, &indices, &face_edge_ids, &zs, &thread_lines, throw_on_cancel_fn](const tbb::blocked_range<int> &range) {
+            std::vector<IntersectionLines> &local_lines = thread_lines.local();
             for (int face_idx = range.begin(); face_idx < range.end(); ++ face_idx) {
                 if ((face_idx & 0x0ffff) == 0)
                     throw_on_cancel_fn();
-                slice_facet_at_zs(vertices, transform_vertex_fn, indices[face_idx], face_edge_ids[face_idx], zs, lines, lines_mutex);
+                slice_facet_at_zs(vertices, transform_vertex_fn, indices[face_idx], face_edge_ids[face_idx], zs, local_lines);
             }
         }
     );
+
+    std::vector<IntersectionLines> lines(zs.size());
+    for (size_t slice_id = 0; slice_id < lines.size(); ++ slice_id) {
+        size_t intersection_count = 0;
+        for (const std::vector<IntersectionLines> &local_lines : thread_lines)
+            intersection_count += local_lines[slice_id].size();
+        lines[slice_id].reserve(intersection_count);
+        for (std::vector<IntersectionLines> &local_lines : thread_lines) {
+            IntersectionLines &local_slice = local_lines[slice_id];
+            lines[slice_id].insert(lines[slice_id].end(),
+                std::make_move_iterator(local_slice.begin()),
+                std::make_move_iterator(local_slice.end()));
+        }
+    }
     return lines;
 }
 

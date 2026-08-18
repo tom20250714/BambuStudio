@@ -1159,9 +1159,15 @@ void Tab::update_all_extruder_options_status()
     }
     m_all_extruder_options_status.clear();
 
+    const Preset &printer_preset = m_preset_bundle->printers.get_edited_preset();
+    if (printer_preset.printer_technology() == ptSLA)
+        return;
+
     int extruder_count = m_preset_bundle->get_printer_extruder_count();
-    auto extruders = m_preset_bundle->printers.get_edited_preset().config.option<ConfigOptionEnumsGeneric>("extruder_type");
+    auto extruders = printer_preset.config.option<ConfigOptionEnumsGeneric>("extruder_type");
     auto nozzle_volumes = m_preset_bundle->project_config.option<ConfigOptionEnumsGeneric>("nozzle_volume_type");
+    if (extruders == nullptr || nozzle_volumes == nullptr || extruders->values.size() < size_t(extruder_count))
+        return;
 
     std::set<int> all_config_indices;
     for (int extruder_id = 0; extruder_id < extruder_count; ++extruder_id) {
@@ -2360,7 +2366,8 @@ void Tab::on_value_change(const std::string& opt_key, const boost::any& value)
         }
     }
 
-    if(opt_key=="layer_height"){
+    if (opt_key == "layer_height" &&
+        m_preset_bundle->printers.get_edited_preset().printer_technology() == ptFFF) {
         auto min_layer_height_from_nozzle=m_preset_bundle->full_config().option<ConfigOptionFloatsNullable>("min_layer_height")->values;
         auto max_layer_height_from_nozzle=m_preset_bundle->full_config().option<ConfigOptionFloatsNullable>("max_layer_height")->values;
         auto layer_height_floor = *std::min_element(min_layer_height_from_nozzle.begin(), min_layer_height_from_nozzle.end());
@@ -2755,6 +2762,10 @@ void Tab::on_presets_changed()
     for (auto t: m_dependent_tabs)
     {
         Tab* tab = wxGetApp().get_tab(t);
+        if (tab == nullptr) {
+            BOOST_LOG_TRIVIAL(error) << __FUNCTION__ << ": dependent preset tab is unavailable, type=" << int(t);
+            continue;
+        }
         // If the printer tells us that the print or filament/sla_material preset has been switched or invalidated,
         // refresh the print or filament/sla_material tab page.
         // But if there are options, moved from the previously selected preset, update them to edited preset
@@ -5930,6 +5941,17 @@ void Tab::load_current_preset()
     std::vector<std::string> prev_variant_list;
     int prev_extruder_count = 0;
 
+    if (m_type == Preset::TYPE_PRINTER && preset.printer_technology() == ptSLA) {
+        const auto *display_width  = m_config->option<ConfigOptionFloat>("display_width");
+        const auto *display_height = m_config->option<ConfigOptionFloat>("display_height");
+        auto       *printable_area = m_config->option<ConfigOptionPoints>("printable_area", true);
+        if (display_width != nullptr && display_height != nullptr && printable_area != nullptr &&
+            display_width->value > 0. && display_height->value > 0.) {
+            printable_area->values = {{0., 0.}, {display_width->value, 0.},
+                                      {display_width->value, display_height->value}, {0., display_height->value}};
+        }
+    }
+
     update_btns_enabling();
 
     if (m_type == Slic3r::Preset::TYPE_PRINTER) {
@@ -5953,6 +5975,25 @@ void Tab::load_current_preset()
         }
     }
     update();
+
+    // The Bambu printer tab is built from FFF option pages. A user-created
+    // SLA/DLP preset does not contain those options, so reloading the retained
+    // FFF fields would dereference missing configuration entries. Keep the
+    // preset selector and dependent SLA presets in sync, but do not feed the
+    // DLP configuration through FFF controls.
+    if (m_type == Preset::TYPE_PRINTER && preset.printer_technology() == ptSLA) {
+        static_cast<TabPrinter *>(this)->m_printer_technology = ptSLA;
+        update_ui_items_related_on_parent_preset(m_presets->get_selected_preset_parent());
+        on_presets_changed();
+        const auto *printable_area   = m_config->option<ConfigOptionPoints>("printable_area");
+        const auto *printable_height = m_config->option<ConfigOptionFloat>("printable_height");
+        if (printable_area != nullptr && printable_height != nullptr && wxGetApp().plater() != nullptr)
+            wxGetApp().plater()->set_bed_shape(printable_area->values, {}, {}, printable_height->value,
+                                               {}, {}, "", "", true);
+        m_opt_status_value = (m_presets->get_selected_preset_parent() ? osSystemValue : 0) | osInitValue;
+        BOOST_LOG_TRIVIAL(info) << __FUNCTION__ << ": exit after SLA/DLP preset-only update";
+        return;
+    }
 
     // Reload preset pages with the new configuration values.
     update_extruder_variants(-1, false);
@@ -5978,58 +6019,19 @@ void Tab::load_current_preset()
         // update show/hide tabs
         if (m_type == Slic3r::Preset::TYPE_PRINTER) {
             const PrinterTechnology printer_technology = m_presets->get_edited_preset().printer_technology();
-            if (printer_technology != static_cast<TabPrinter*>(this)->m_printer_technology)
-            {
-                // The change of the technology requires to remove some of unrelated Tabs
-                // During this action, wxNoteBook::RemovePage invoke wxEVT_NOTEBOOK_PAGE_CHANGED
-                // and as a result a function select_active_page() is called fron Tab::OnActive()
-                // But we don't need it. So, to avoid activation of the page, set m_active_page to NULL
-                // till unusable Tabs will be deleted
-                Page* tmp_page = m_active_page;
-                m_active_page = nullptr;
-                for (auto tab : wxGetApp().tabs_list) {
-                    if (tab->type() == Preset::TYPE_PRINTER) { // Printer tab is shown every time
-                        int cur_selection = wxGetApp().tab_panel()->GetSelection();
-                        if (cur_selection != 0)
-                            wxGetApp().tab_panel()->SetSelection(wxGetApp().tab_panel()->GetPageCount() - 1);
-                        continue;
-                    }
-                    if (tab->supports_printer_technology(printer_technology))
-                    {
-#ifdef _MSW_DARK_MODE
-                        if (!wxGetApp().tabs_as_menu()) {
-                            std::string bmp_name = tab->type() == Slic3r::Preset::TYPE_FILAMENT      ? "spool" :
-                                                   tab->type() == Slic3r::Preset::TYPE_SLA_MATERIAL  ? "" : "cog";
-                            tab->Hide(); // #ys_WORKAROUND : Hide tab before inserting to avoid unwanted rendering of the tab
-                            dynamic_cast<Notebook*>(wxGetApp().tab_panel())->InsertPage(wxGetApp().tab_panel()->FindPage(this), tab, tab->title(), bmp_name);
-                        }
-                        else
-#endif
-                            wxGetApp().tab_panel()->InsertPage(wxGetApp().tab_panel()->FindPage(this), tab, tab->title(), "");
-                        #ifdef __linux__ // the tabs apparently need to be explicitly shown on Linux (pull request #1563)
-                            int page_id = wxGetApp().tab_panel()->FindPage(tab);
-                            wxGetApp().tab_panel()->GetPage(page_id)->Show(true);
-                        #endif // __linux__
-                    }
-                    else {
-                        int page_id = wxGetApp().tab_panel()->FindPage(tab);
-                        wxGetApp().tab_panel()->GetPage(page_id)->Show(false);
-                        wxGetApp().tab_panel()->RemovePage(page_id);
-                    }
-                }
-                static_cast<TabPrinter*>(this)->m_printer_technology = printer_technology;
-                m_active_page = tmp_page;
-#ifdef _MSW_DARK_MODE
-                if (!wxGetApp().tabs_as_menu())
-                    dynamic_cast<Notebook*>(wxGetApp().tab_panel())->SetPageImage(wxGetApp().tab_panel()->FindPage(this), printer_technology == ptFFF ? "printer" : "sla_printer");
-#endif
-            }
-            //update the object config due to extruder count change
-            DynamicPrintConfig& new_print_config = wxGetApp().preset_bundle->prints.get_edited_preset().config;
-            std::vector<std::string> new_variant_list = wxGetApp().preset_bundle->printers.get_edited_preset().config.option<ConfigOptionStrings>("printer_extruder_variant")->values;
-            int new_extruder_count = wxGetApp().preset_bundle->get_printer_extruder_count();
-            if (prev_extruder_count != new_extruder_count || prev_variant_list.size() != new_variant_list.size())
-            {
+            // Keep the current notebook page and all existing tabs in place.
+            // Selecting an SLA/DLP preset should change the active preset only;
+            // automatic FFF/SLA tab insertion/removal causes an unwanted page
+            // transition and leaves event handlers referring to removed pages.
+            static_cast<TabPrinter*>(this)->m_printer_technology = printer_technology;
+            // Object extruder variants only exist for FFF printers.
+            if (printer_technology == ptFFF) {
+                DynamicPrintConfig& new_print_config = wxGetApp().preset_bundle->prints.get_edited_preset().config;
+                const auto *variant_option = wxGetApp().preset_bundle->printers.get_edited_preset().config.option<ConfigOptionStrings>("printer_extruder_variant");
+                std::vector<std::string> new_variant_list = variant_option ? variant_option->values : std::vector<std::string>{};
+                int new_extruder_count = wxGetApp().preset_bundle->get_printer_extruder_count();
+                if (prev_extruder_count != new_extruder_count || prev_variant_list.size() != new_variant_list.size())
+                {
                 //process the object params here
                 Model& model = wxGetApp().plater()->model();
                 size_t num_objects = model.objects.size();
@@ -6059,6 +6061,7 @@ void Tab::load_current_preset()
                        }
                     }
                 }
+            }
             }
 
             on_presets_changed();
@@ -6210,6 +6213,10 @@ bool Tab::select_preset(
                                         %idx_new %preset_name;
         }
     }
+    if (!preset_name.empty() && m_presets->find_preset(preset_name, true) == nullptr) {
+        BOOST_LOG_TRIVIAL(error) << __FUNCTION__ << ": requested preset was not found: " << preset_name;
+        return false;
+    }
     //BBS: add project embedded preset logic and refine is_external
     assert(! delete_current || (m_presets->get_edited_preset().name != preset_name && (m_presets->get_edited_preset().is_user() || m_presets->get_edited_preset().is_project_embedded)));
     //assert(! delete_current || (m_presets->get_edited_preset().name != preset_name && m_presets->get_edited_preset().is_user()));
@@ -6295,9 +6302,9 @@ bool Tab::select_preset(
             };
             std::vector<PresetUpdate> updates = {
                 { Preset::Type::TYPE_PRINT,         &m_preset_bundle->prints,       ptFFF },
-                //{ Preset::Type::TYPE_SLA_PRINT,     &m_preset_bundle->sla_prints,   ptSLA },
+                { Preset::Type::TYPE_SLA_PRINT,     &m_preset_bundle->sla_prints,   ptSLA },
                 { Preset::Type::TYPE_FILAMENT,      &m_preset_bundle->filaments,    ptFFF },
-                //{ Preset::Type::TYPE_SLA_MATERIAL,  &m_preset_bundle->sla_materials,ptSLA }
+                { Preset::Type::TYPE_SLA_MATERIAL,  &m_preset_bundle->sla_materials,ptSLA }
             };
             Preset *to_be_selected = m_presets->find_preset(preset_name, false, true);
             for (PresetUpdate &pu : updates) {
@@ -6446,9 +6453,9 @@ bool Tab::select_preset(
              * to the corresponding printer_technology
              */
             const PrinterTechnology printer_technology = m_presets->get_edited_preset().printer_technology();
-            if (printer_technology == ptFFF && m_dependent_tabs.front() != Preset::Type::TYPE_PRINT)
+            if (printer_technology == ptFFF && (m_dependent_tabs.empty() || m_dependent_tabs.front() != Preset::Type::TYPE_PRINT))
                 m_dependent_tabs = { Preset::Type::TYPE_PRINT, Preset::Type::TYPE_FILAMENT };
-            else if (printer_technology == ptSLA && m_dependent_tabs.front() != Preset::Type::TYPE_SLA_PRINT)
+            else if (printer_technology == ptSLA && (m_dependent_tabs.empty() || m_dependent_tabs.front() != Preset::Type::TYPE_SLA_PRINT))
                 m_dependent_tabs = { Preset::Type::TYPE_SLA_PRINT, Preset::Type::TYPE_SLA_MATERIAL };
         }
 
@@ -6456,6 +6463,10 @@ bool Tab::select_preset(
         apply_config_from_cache();
 
         load_current_preset();
+
+        if (printer_tab && technology_changed && wxGetApp().mainframe != nullptr &&
+            wxGetApp().mainframe->m_param_panel != nullptr)
+            wxGetApp().mainframe->m_param_panel->reload_for_printer_technology();
 
         if (delete_third_printer) {
             wxGetApp().CallAfter([filament_presets, process_presets]() {
@@ -6489,8 +6500,10 @@ bool Tab::select_preset(
 
     }
 
-    if (technology_changed)
-        wxGetApp().mainframe->technology_changed();
+    // Keep the surrounding UI unchanged when the selected printer preset uses
+    // another technology.  In this workflow only the preset selection changes;
+    // menu/tab technology updates would run on the next UI event and can refer
+    // to controls which are intentionally being kept in their current layout.
     BOOST_LOG_TRIVIAL(info) << boost::format("select preset, exit");
 
     return !canceled;
@@ -7520,6 +7533,16 @@ MachineObject* get_current_machine_object()
 void Tab::update_extruder_variants(int extruder_id, bool reload)
 {
     BOOST_LOG_TRIVIAL(info) << __FUNCTION__ << extruder_id;
+    // Extruder variants are an FFF-only concept.  The printer tab keeps the
+    // controls allocated while switching technologies, so a newly selected
+    // SLA/DLP preset may otherwise reach the FFF option lookups below.
+    if (m_preset_bundle == nullptr ||
+        m_preset_bundle->printers.get_edited_preset().printer_technology() != ptFFF) {
+        if (m_variant_sizer && m_main_sizer)
+            m_main_sizer->Show(m_variant_sizer, false);
+        return;
+    }
+
     if (m_extruder_switch) {
         auto    nozzle_volumes = m_preset_bundle->project_config.option<ConfigOptionEnumsGeneric>("nozzle_volume_type");
         int extruder_nums = m_preset_bundle->get_printer_extruder_count();
@@ -7736,9 +7759,15 @@ bool Tab::get_extruder_sync_enable_state(int extruder_id)
 
 void Tab::switch_excluder(int extruder_id, bool reload)
 {
+    if (m_preset_bundle == nullptr || m_config == nullptr ||
+        m_preset_bundle->printers.get_edited_preset().printer_technology() != ptFFF)
+        return;
+
     Preset & printer_preset = m_preset_bundle->printers.get_edited_preset();
     auto nozzle_volumes = m_preset_bundle->project_config.option<ConfigOptionEnumsGeneric>("nozzle_volume_type");
     auto extruders      = printer_preset.config.option<ConfigOptionEnumsGeneric>("extruder_type");
+    if (nozzle_volumes == nullptr || extruders == nullptr || extruders->values.empty())
+        return;
     if (m_extruder_switch) {
         int current_extruder = get_current_active_extruder();
         bool sync_enable = get_extruder_sync_enable_state(current_extruder);
@@ -8317,8 +8346,8 @@ const ConfigOptionsGroupShp Page::get_optgroup(const wxString& title) const
 
 void TabSLAMaterial::build()
 {
-    //m_presets = &m_preset_bundle->sla_materials;
-    //load_initial_data();
+    m_presets = &m_preset_bundle->sla_materials;
+    load_initial_data();
 
     //auto page = add_options_page(L("Material"), "");
 
@@ -8442,10 +8471,13 @@ void TabSLAPrint::build()
     m_presets = &m_preset_bundle->sla_prints;
     load_initial_data();
 
-//    auto page = add_options_page(L("Layers and perimeters"), "layers");
+    // Keep the DLP process panel deliberately small for now. Layer height is
+    // the actual DLP slicing thickness and is the essential setting users need
+    // when selecting a DLP printer preset.
+    auto page = add_options_page(L("Slicing"), "param_layer_height");
+    auto optgroup = page->new_optgroup(L("Layer height"), L"param_layer_height");
+    optgroup->append_single_option_line("layer_height", "layer-height");
 //
-//    auto optgroup = page->new_optgroup(L("Layers"));
-//    optgroup->append_single_option_line("layer_height");
 //    optgroup->append_single_option_line("faded_layers");
 //
 //    page = add_options_page(L("Supports"), "support"/*"sla_supports"*/);

@@ -40,8 +40,10 @@
 #include <wx/dirdlg.h>
 #include <wx/textctrl.h>
 #include <wx/checkbox.h>
+#include <wx/choicdlg.h>
 #include <wx/dnd.h>
 #include <wx/progdlg.h>
+#include <wx/slider.h>
 #include <wx/timer.h>
 #include <wx/gauge.h>
 #include <wx/wupdlock.h>
@@ -3508,6 +3510,27 @@ void Sidebar::update_presets(Preset::Type preset_type)
 
        wxGetApp().mainframe->update_calibration_button_status();
 
+        // The sidebar below is entirely based on FFF nozzle/extruder options.
+        // SLA/DLP printer presets intentionally do not contain those options.
+        if (printer_preset.printer_technology() != ptFFF) {
+            p->layout_printer(false, false);
+            wxGetApp().mainframe->set_dlp_button_mode(true);
+            p->m_panel_filament_title->Hide();
+            p->m_panel_filament_subtitle->Hide();
+            p->m_filament_area_wrapper->Hide();
+            p->m_panel_filament_content->Hide();
+            wxGetApp().plater()->get_current_canvas3D()->get_arrange_settings().align_to_y_axis = false;
+            if (GUI::wxGetApp().plater())
+                GUI::wxGetApp().plater()->update_machine_sync_status();
+            Layout();
+            break;
+        }
+        wxGetApp().mainframe->set_dlp_button_mode(false);
+        p->m_panel_filament_title->Show();
+        p->m_panel_filament_subtitle->Show();
+        p->m_filament_area_wrapper->Show();
+        p->m_panel_filament_content->Show();
+
         if (auto printer_structure_opt = printer_preset.config.option<ConfigOptionEnum<PrinterStructure>>("printer_structure")) {
             wxGetApp().plater()->get_current_canvas3D()->get_arrange_settings().align_to_y_axis = (printer_structure_opt->value == PrinterStructure::psI3);
         }
@@ -4883,9 +4906,13 @@ static std::vector<Search::InputInfo> get_search_inputs(ConfigOptionMode mode)
 
     auto& tabs_list = wxGetApp().tabs_list;
     auto print_tech = wxGetApp().preset_bundle->printers.get_selected_preset().printer_technology();
-    for (auto tab : tabs_list)
-        if (tab->supports_printer_technology(print_tech))
-            ret.emplace_back(Search::InputInfo {tab->get_config(), tab->type(), mode});
+    for (auto tab : tabs_list) {
+        if (tab == nullptr || !tab->supports_printer_technology(print_tech))
+            continue;
+        DynamicPrintConfig *config = tab->get_config();
+        if (config != nullptr)
+            ret.emplace_back(Search::InputInfo {config, tab->type(), mode});
+    }
 
     return ret;
 }
@@ -6134,6 +6161,9 @@ void Sidebar::update_printer_thumbnail()
 }
 
 void Sidebar::auto_calc_flushing_volumes(const int filament_idx, const int extruder_id) {
+    if (wxGetApp().preset_bundle == nullptr ||
+        wxGetApp().preset_bundle->printers.get_edited_preset().printer_technology() != ptFFF)
+        return;
 
     std::vector<int> filament_indices;
     std::vector<int> extruder_indices;
@@ -7150,6 +7180,7 @@ Plater::priv::priv(Plater *q, MainFrame *main_frame)
 
     //BBS: use the first partplate's print for background process
     partplate_list.update_slice_context_to_current_plate(background_process);
+    background_process.set_sla_print(&sla_print);
     /*
     background_process.set_fff_print(&fff_print);
     background_process.set_sla_print(&sla_print);
@@ -7316,8 +7347,7 @@ Plater::priv::priv(Plater *q, MainFrame *main_frame)
     if (wxGetApp().is_editor()) {
         // 3DScene events:
         view3D_canvas->Bind(EVT_GLCANVAS_SCHEDULE_BACKGROUND_PROCESS, [this](SimpleEvent&) {
-            delayed_error_message.clear();
-            this->background_process_timer.Start(500, wxTIMER_ONE_SHOT);
+            this->schedule_background_process();
             });
         view3D_canvas->Bind(EVT_GLCANVAS_OBJECT_SELECT, &priv::on_object_select, this);
         view3D_canvas->Bind(EVT_GLCANVAS_PLATE_NAME_CHANGE, &priv::on_plate_name_change, this);
@@ -7687,7 +7717,12 @@ void Plater::priv::update(unsigned int flags)
 #endif
 
     unsigned int update_status = 0;
-    const bool force_background_processing_restart = this->printer_technology == ptSLA || (flags & (unsigned int)UpdateParams::FORCE_BACKGROUND_PROCESSING_UPDATE);
+    // DLP output is produced by the independent DLP engine on demand. Running
+    // the native SLA worker continuously duplicates slicing work, causes heavy
+    // lag immediately after STL import and races model-transform gizmos.
+    const bool is_dlp = this->printer_technology == ptSLA;
+    const bool force_background_processing_restart =
+        !is_dlp && (flags & (unsigned int)UpdateParams::FORCE_BACKGROUND_PROCESSING_UPDATE);
     if (force_background_processing_restart)
         // Update the SLAPrint from the current Model, so that the reload_scene()
         // pulls the correct data.
@@ -7701,7 +7736,10 @@ void Plater::priv::update(unsigned int flags)
     // todo: better to mark thumbnail dirty here
     q->mark_plate_toolbar_image_dirty();
 
-    if (force_background_processing_restart)
+    if (is_dlp) {
+        this->background_process_timer.Stop();
+        this->background_process.stop();
+    } else if (force_background_processing_restart)
         this->restart_background_process(update_status);
     else
         this->schedule_background_process();
@@ -10645,6 +10683,12 @@ void Plater::priv::scale_selection_to_fit_print_volume()
 void Plater::priv::schedule_background_process()
 {
     delayed_error_message.clear();
+    if (this->printer_technology == ptSLA) {
+        this->background_process_timer.Stop();
+        this->background_process.stop();
+        this->view3D->get_canvas3d()->set_config(this->config);
+        return;
+    }
     // Trigger the timer event after 0.5s
     this->background_process_timer.Start(500, wxTIMER_ONE_SHOT);
     // Notify the Canvas3D that something has changed, so it may invalidate some of the layer editing stuff.
@@ -10772,11 +10816,18 @@ unsigned int Plater::priv::update_background_process(bool force_validation, bool
         this->preview->update_gcode_result(partplate_list.get_current_slice_result());
     }
 
-    background_process.fff_print()->set_check_multi_filaments_compatibility(wxGetApp().app_config->get("enable_high_low_temp_mixed_printing") == "false");
+    const auto &preset_bundle = wxGetApp().preset_bundle;
+    const PrinterTechnology active_technology = preset_bundle->printers.get_edited_preset().printer_technology();
+    // PartPlate currently owns only an FFF Print instance and may select FFF while
+    // updating its context. Restore the technology selected by the active preset
+    // before applying the combined configuration.
+    background_process.select_technology(active_technology);
+
+    if (active_technology == ptFFF)
+        background_process.fff_print()->set_check_multi_filaments_compatibility(wxGetApp().app_config->get("enable_high_low_temp_mixed_printing") == "false");
 
     Print::ApplyStatus invalidated;
-    const auto& preset_bundle = wxGetApp().preset_bundle;
-    if (preset_bundle->get_printer_extruder_count() > 1) {
+    if (active_technology == ptFFF && preset_bundle->get_printer_extruder_count() > 1) {
         PartPlate* cur_plate = background_process.get_current_plate();
         std::vector<int> f_maps = cur_plate->get_real_filament_maps(preset_bundle->project_config);
         std::vector<int> f_volume_maps = cur_plate->get_filament_volume_maps();
@@ -12312,10 +12363,17 @@ void Plater::priv::on_select_preset(wxCommandEvent &evt)
             update_objects_position_when_select_preset([this, &preset_type, &preset_name]() {
                 wxWindowUpdateLocker noUpdates2(sidebar->filament_panel());
                 wxGetApp().get_tab(preset_type)->select_preset(preset_name);
-                // update plater with new config
-                q->on_config_change(wxGetApp().preset_bundle->full_config());
+                // The normal full-config notification starts the complete FFF
+                // post-processing chain. DLP selection here is preset-only.
+                if (wxGetApp().preset_bundle->printers.get_edited_preset().printer_technology() == ptFFF)
+                    q->on_config_change(wxGetApp().preset_bundle->full_config());
             });
 
+            if (wxGetApp().preset_bundle->printers.get_edited_preset().printer_technology() != ptFFF) {
+                wxGetApp().preset_bundle->export_selections(*wxGetApp().app_config);
+                wxGetApp().plater()->update_project_dirty_from_presets();
+                return;
+            }
 
             if (old_preset_name != preset_name && wxGetApp().app_config->get("auto_calculate_flush") == "all") {
                 wxGetApp().plater()->sidebar().auto_calc_flushing_volumes(-1);
@@ -15968,7 +16026,9 @@ void Plater::priv::update_objects_position_when_select_preset(const std::functio
     old_plate_wt_bbox.reserve(old_plate_list.get_plate_count());
     const DynamicPrintConfig &old_full_config         = wxGetApp().preset_bundle->full_config();
     const int                 old_nozzle_nums         = wxGetApp().preset_bundle->get_printer_extruder_count();
-    const bool                old_prime_tower_enabled = old_full_config.opt_bool("enable_prime_tower");
+    const bool                old_is_fff = wxGetApp().preset_bundle->printers.get_edited_preset().printer_technology() == ptFFF;
+    const bool                old_prime_tower_enabled =
+        old_is_fff && old_full_config.has("enable_prime_tower") && old_full_config.opt_bool("enable_prime_tower");
     for (size_t i = 0; i < old_plate_list.get_plate_count(); ++i) {
         PartPlate                    *plate   = old_plate_list.get_plate(i);
         std::set<std::pair<int, int>> obj_set = plate->get_obj_and_inst_set();
@@ -16047,6 +16107,14 @@ void Plater::priv::update_objects_position_when_select_preset(const std::functio
     select_prest();
 
     wxGetApp().obj_list()->update_object_list_by_printer_technology();
+
+    // DLP preset selection is intentionally non-destructive: keep the current
+    // plates and object positions exactly as they are.  Everything below is an
+    // FFF bed-change workflow (wipe tower, filament maps and nozzle geometry).
+    if (wxGetApp().preset_bundle->printers.get_edited_preset().printer_technology() != ptFFF) {
+        update();
+        return;
+    }
 
     // set default wipe tower pos
     PartPlateList &cur_plate_list       = this->partplate_list;
@@ -17117,7 +17185,12 @@ bool Plater::priv::can_split_to_volumes() const
 
 bool Plater::priv::can_do_ui_job() const
 {
-    return !model.objects.empty() && !m_ui_jobs.is_any_running() && !q->is_background_process_slicing();
+    // SLA/DLP background processing is restarted continuously as the model is
+    // edited. Arrange/orient jobs stop that worker in Jobs::before_start(), so
+    // treating it like an active FFF slice permanently disables these tools.
+    const bool background_blocks_ui =
+        printer_technology == ptFFF && q->is_background_process_slicing();
+    return !model.objects.empty() && !m_ui_jobs.is_any_running() && !background_blocks_ui;
 }
 
 bool Plater::priv::layers_height_allowed() const
@@ -21788,54 +21861,34 @@ void Plater::export_dlp_images()
         return;
     }
 
-    wxDialog dialog(this, wxID_ANY, _L("DLP Image Export Settings"), wxDefaultPosition, wxDefaultSize,
-                    wxDEFAULT_DIALOG_STYLE | wxRESIZE_BORDER);
-    auto *root = new wxBoxSizer(wxVERTICAL);
-    auto *grid = new wxFlexGridSizer(2, 8, 12);
-    grid->AddGrowableCol(1, 1);
-
-    auto add_field = [&](const wxString &label, const wxString &value) {
-        grid->Add(new wxStaticText(&dialog, wxID_ANY, label), 0, wxALIGN_CENTER_VERTICAL);
-        auto *field = new wxTextCtrl(&dialog, wxID_ANY, value);
-        grid->Add(field, 1, wxEXPAND);
-        return field;
-    };
-
-    wxTextCtrl *width_px       = add_field(_L("Resolution width (px)"), "1920");
-    wxTextCtrl *height_px      = add_field(_L("Resolution height (px)"), "1080");
-    wxTextCtrl *build_width    = add_field(_L("Build width (mm)"), "120");
-    wxTextCtrl *build_height   = add_field(_L("Build height (mm)"), "67.5");
-    wxTextCtrl *layer_height   = add_field(_L("Layer height (mm)"), "0.05");
-    wxTextCtrl *exposure       = add_field(_L("Exposure time (s)"), "2.0");
-    wxTextCtrl *initial_layers = add_field(_L("Initial layer count"), "5");
-    wxTextCtrl *initial_expose = add_field(_L("Initial exposure time (s)"), "20.0");
-
-    auto *mirror_x = new wxCheckBox(&dialog, wxID_ANY, _L("Mirror X"));
-    auto *mirror_y = new wxCheckBox(&dialog, wxID_ANY, _L("Mirror Y"));
-    auto *mirror_row = new wxBoxSizer(wxHORIZONTAL);
-    mirror_row->Add(mirror_x, 0, wxRIGHT, 20);
-    mirror_row->Add(mirror_y, 0);
-
-    root->Add(grid, 1, wxEXPAND | wxALL, 15);
-    root->Add(mirror_row, 0, wxLEFT | wxRIGHT | wxBOTTOM, 15);
-    root->Add(dialog.CreateSeparatedButtonSizer(wxOK | wxCANCEL), 0, wxEXPAND | wxALL, 10);
-    dialog.SetSizerAndFit(root);
-    dialog.SetMinSize(dialog.GetSize());
-    if (dialog.ShowModal() != wxID_OK)
-        return;
-
-    unsigned long width = 0, height = 0, bottom_count = 0;
-    double bed_width = 0.0, bed_height = 0.0, layer = 0.0, exposure_s = 0.0, bottom_exposure_s = 0.0;
-    const bool valid = width_px->GetValue().ToULong(&width) && height_px->GetValue().ToULong(&height) &&
-        initial_layers->GetValue().ToULong(&bottom_count) && build_width->GetValue().ToDouble(&bed_width) &&
-        build_height->GetValue().ToDouble(&bed_height) && layer_height->GetValue().ToDouble(&layer) &&
-        exposure->GetValue().ToDouble(&exposure_s) && initial_expose->GetValue().ToDouble(&bottom_exposure_s) &&
-        width > 0 && height > 0 && bed_width > 0.0 && bed_height > 0.0 && layer > 0.0 && exposure_s > 0.0 &&
-        bottom_exposure_s > 0.0;
-    if (!valid) {
-        GUI::show_error(this, _L("DLP settings must contain positive numeric values."));
+    const PresetBundle *bundle = wxGetApp().preset_bundle;
+    if (bundle == nullptr ||
+        bundle->printers.get_edited_preset().printer_technology() != ptSLA) {
+        GUI::show_error(this, _L("Select a DLP printer preset before exporting layer images."));
         return;
     }
+
+    const DynamicPrintConfig &printer_cfg = bundle->printers.get_edited_preset().config;
+    const DynamicPrintConfig &process_cfg = bundle->sla_prints.get_edited_preset().config;
+    const int width  = printer_cfg.has("display_pixels_x") ? printer_cfg.opt_int("display_pixels_x") : 0;
+    const int height = printer_cfg.has("display_pixels_y") ? printer_cfg.opt_int("display_pixels_y") : 0;
+    const double bed_width  = printer_cfg.has("display_width") ? printer_cfg.opt_float("display_width") : 0.0;
+    const double bed_height = printer_cfg.has("display_height") ? printer_cfg.opt_float("display_height") : 0.0;
+    const double layer = process_cfg.has("layer_height") ? process_cfg.opt_float("layer_height") : 0.0;
+    if (width <= 0 || height <= 0 || bed_width <= 0.0 || bed_height <= 0.0 || layer <= 0.0) {
+        GUI::show_error(this, _L("The selected DLP preset has invalid resolution, build size, or layer height."));
+        return;
+    }
+
+    wxArrayString format_choices;
+    format_choices.Add(_L("PNG (grayscale antialiasing)"));
+    format_choices.Add(_L("BMP (1-bit black and white)"));
+    wxSingleChoiceDialog format_dialog(this, _L("Choose the DLP layer image format"),
+                                       _L("DLP Output Format"), format_choices);
+    format_dialog.SetSelection(1);
+    if (format_dialog.ShowModal() != wxID_OK)
+        return;
+    const bool output_bmp = format_dialog.GetSelection() == 1;
 
     wxDirDialog output_dialog(this, _L("Choose a DLP image output directory"),
                               from_u8(wxGetApp().app_config->get_last_dir()),
@@ -21850,21 +21903,37 @@ void Plater::export_dlp_images()
             output_path = output_root / ("DLP_Output_" + std::to_string(suffix));
 
         p->background_process.stop();
-        const Model model_snapshot = p->model;
+        // Export is synchronous and the modal progress dialog prevents model
+        // editing, so a read-only reference is safe and avoids duplicating a
+        // potentially very large STL in memory.
+        const Model &model_snapshot = p->model;
 
         dlp::PrinterConfig printer {{static_cast<uint32_t>(width), static_cast<uint32_t>(height)},
                                     bed_width, bed_height};
-        printer.mirror_x = mirror_x->GetValue();
-        printer.mirror_y = mirror_y->GetValue();
+        // Match common DLP controller slicers by supersampling each output
+        // pixel. This produces grayscale coverage at polygon boundaries
+        // instead of the visibly stair-stepped 1-sample binary edge.
+        // A 1-bit target cannot retain grayscale coverage. Avoid spending four
+        // raster samples per pixel only to threshold them back to black/white.
+        // PNG keeps 2x2 supersampling for smooth grayscale edges.
+        printer.antialiasing_samples = output_bmp ? 1 : 2;
 
         dlp::ProcessConfig process;
         process.layer_height_mm = layer;
-        process.exposure_time_s = exposure_s;
-        process.initial_layer_count = static_cast<uint32_t>(bottom_count);
-        process.initial_exposure_time_s = bottom_exposure_s;
 
         dlp::ExecutionConfig execution;
-        execution.placement = dlp::PlacementMode::CenterOnBuildArea;
+        execution.placement = dlp::PlacementMode::PreserveModelPosition;
+        // Bound peak raster memory and CPU saturation. Two full-resolution
+        // layers in flight keeps the UI and lower-memory systems responsive.
+        execution.max_parallel_layers = 2;
+        execution.output.layer_extension = output_bmp ? ".bmp" : ".png";
+        // BMP controllers expect layer files whose base name contains digits only
+        // (for example, 0001.bmp instead of SEC_0001.bmp).
+        if (output_bmp)
+            execution.output.layer_prefix.clear();
+        // Keep the representative preview easy and fast to display even when
+        // controller layers use packed 1-bit BMP.
+        execution.output.preview_filename = "Preview_t.png";
         execution.output.write_preview = true;
         execution.output.write_manifest = false;
         execution.output.write_viewer = false;
@@ -21885,6 +21954,122 @@ void Plater::export_dlp_images()
         done.ShowModal();
     } catch (const std::exception &e) {
         GUI::show_error(this, from_u8(e.what()));
+    }
+}
+
+bool Plater::preview_dlp_images()
+{
+    if (p->model.objects.empty()) {
+        GUI::show_error(this, _L("Load a model before previewing DLP layers."));
+        return false;
+    }
+
+    const PresetBundle *bundle = wxGetApp().preset_bundle;
+    if (bundle == nullptr ||
+        bundle->printers.get_edited_preset().printer_technology() != ptSLA) {
+        GUI::show_error(this, _L("Select a DLP printer preset before previewing layers."));
+        return false;
+    }
+
+    const DynamicPrintConfig &printer_cfg = bundle->printers.get_edited_preset().config;
+    const DynamicPrintConfig &process_cfg = bundle->sla_prints.get_edited_preset().config;
+    const int width  = printer_cfg.has("display_pixels_x") ? printer_cfg.opt_int("display_pixels_x") : 0;
+    const int height = printer_cfg.has("display_pixels_y") ? printer_cfg.opt_int("display_pixels_y") : 0;
+    const double bed_width  = printer_cfg.has("display_width") ? printer_cfg.opt_float("display_width") : 0.0;
+    const double bed_height = printer_cfg.has("display_height") ? printer_cfg.opt_float("display_height") : 0.0;
+    const double layer = process_cfg.has("layer_height") ? process_cfg.opt_float("layer_height") : 0.0;
+    if (width <= 0 || height <= 0 || bed_width <= 0.0 || bed_height <= 0.0 || layer <= 0.0) {
+        GUI::show_error(this, _L("The selected DLP preset has invalid resolution, build size, or layer height."));
+        return false;
+    }
+
+    boost::filesystem::path preview_path;
+    try {
+        preview_path = boost::filesystem::temp_directory_path() /
+                       boost::filesystem::unique_path("BambuStudio_DLP_Preview_%%%%-%%%%-%%%%");
+
+        p->background_process.stop();
+        dlp::PrinterConfig printer {{static_cast<uint32_t>(width), static_cast<uint32_t>(height)},
+                                    bed_width, bed_height};
+        printer.antialiasing_samples = 2;
+
+        dlp::ProcessConfig process;
+        process.layer_height_mm = layer;
+
+        dlp::ExecutionConfig execution;
+        execution.placement = dlp::PlacementMode::PreserveModelPosition;
+        execution.max_parallel_layers = 2;
+        execution.output.layer_extension = ".png";
+        execution.output.preview_filename = "Preview_t.png";
+        execution.output.write_preview = false;
+        execution.output.write_manifest = false;
+        execution.output.write_viewer = false;
+
+        wxProgressDialog progress(_L("DLP Preview"), _L("Generating DLP preview layers..."), 100, this,
+                                  wxPD_APP_MODAL | wxPD_AUTO_HIDE | wxPD_SMOOTH);
+        const dlp::ExportResult result = dlp::export_directory(
+            p->model, printer, process, preview_path.string(), execution, {},
+            [&](double value, const std::string &message) {
+                const int percent = std::clamp(static_cast<int>(std::lround(value * 100.0)), 0, 100);
+                progress.Update(percent, from_u8(message));
+            });
+
+        if (result.layer_count == 0)
+            throw std::runtime_error("No DLP preview layers were generated.");
+
+        wxDialog dialog(this, wxID_ANY, _L("DLP Layer Preview"), wxDefaultPosition,
+                        wxSize(FromDIP(900), FromDIP(760)),
+                        wxDEFAULT_DIALOG_STYLE | wxRESIZE_BORDER);
+        auto *root = new wxBoxSizer(wxVERTICAL);
+        auto *info = new wxStaticText(&dialog, wxID_ANY, wxEmptyString);
+        auto *image = new wxStaticBitmap(&dialog, wxID_ANY, wxNullBitmap);
+        auto *slider = new wxSlider(&dialog, wxID_ANY, 1, 1,
+                                    static_cast<int>(result.layer_count),
+                                    wxDefaultPosition, wxDefaultSize,
+                                    wxSL_HORIZONTAL | wxSL_LABELS);
+
+        root->Add(info, 0, wxEXPAND | wxLEFT | wxRIGHT | wxTOP, FromDIP(12));
+        root->Add(image, 1, wxEXPAND | wxALL, FromDIP(12));
+        root->Add(slider, 0, wxEXPAND | wxLEFT | wxRIGHT | wxBOTTOM, FromDIP(12));
+        root->Add(dialog.CreateSeparatedButtonSizer(wxOK), 0, wxEXPAND | wxALL, FromDIP(8));
+        dialog.SetSizer(root);
+
+        wxDialog *dialog_ptr = &dialog;
+        auto show_layer = [image, info, dialog_ptr, preview_path, result, layer](int layer_number) {
+            std::ostringstream filename;
+            filename << "SEC_" << std::setw(4) << std::setfill('0') << layer_number << ".png";
+            wxImage layer_image(from_u8((preview_path / filename.str()).string()), wxBITMAP_TYPE_PNG);
+            if (!layer_image.IsOk())
+                return;
+
+            const wxSize area = image->GetClientSize();
+            const int max_w = std::max(1, area.GetWidth());
+            const int max_h = std::max(1, area.GetHeight());
+            const double scale = std::min(static_cast<double>(max_w) / layer_image.GetWidth(),
+                                          static_cast<double>(max_h) / layer_image.GetHeight());
+            const int shown_w = std::max(1, static_cast<int>(std::lround(layer_image.GetWidth() * scale)));
+            const int shown_h = std::max(1, static_cast<int>(std::lround(layer_image.GetHeight() * scale)));
+            image->SetBitmap(wxBitmap(layer_image.Scale(shown_w, shown_h, wxIMAGE_QUALITY_NORMAL)));
+            info->SetLabel(wxString::Format(_L("Layer %d / %zu   Height: %.3f mm"),
+                                            layer_number, result.layer_count,
+                                            layer_number * layer));
+            dialog_ptr->Layout();
+        };
+
+        slider->Bind(wxEVT_SLIDER, [show_layer, slider](wxCommandEvent &) { show_layer(slider->GetValue()); });
+        dialog.CallAfter([show_layer]() { show_layer(1); });
+        dialog.ShowModal();
+
+        boost::system::error_code cleanup_error;
+        boost::filesystem::remove_all(preview_path, cleanup_error);
+        return true;
+    } catch (const std::exception &e) {
+        if (!preview_path.empty()) {
+            boost::system::error_code cleanup_error;
+            boost::filesystem::remove_all(preview_path, cleanup_error);
+        }
+        GUI::show_error(this, from_u8(e.what()));
+        return false;
     }
 }
 
@@ -24234,9 +24419,11 @@ void Plater::changed_object(ModelObject &object)
     object.ensure_on_bed(p->printer_technology != ptSLA);
 
     if (p->printer_technology == ptSLA) {
-        // Update the SLAPrint from the current Model, so that the reload_scene()
-        // pulls the correct data, update the 3D scene.
-        p->update_restart_background_process(true, false);
+        // Do not synchronously restart SLA/DLP processing from inside a gizmo
+        // completion event. reload_scene() invalidates GL volumes that the
+        // flatten/rotate/scale gizmo may still reference. Refresh geometry now
+        // and let the already scheduled background timer run after the event.
+        p->view3D->reload_scene(false);
     } else
         p->view3D->reload_scene(false);
 
@@ -24254,9 +24441,7 @@ void Plater::changed_object(int obj_idx)
     // recenter and re - align to Z = 0
     p->model.objects[obj_idx]->ensure_on_bed(p->printer_technology != ptSLA);
     if (this->p->printer_technology == ptSLA) {
-        // Update the SLAPrint from the current Model, so that the reload_scene()
-        // pulls the correct data, update the 3D scene.
-        this->p->update_restart_background_process(true, false);
+        this->p->view3D->reload_scene(false);
     }
     else
         p->view3D->reload_scene(false);
@@ -24278,9 +24463,8 @@ void Plater::changed_objects(const std::vector<size_t>& object_idxs)
         }
     }
     if (this->p->printer_technology == ptSLA) {
-        // Update the SLAPrint from the current Model, so that the reload_scene()
-        // pulls the correct data, update the 3D scene.
-        this->p->update_restart_background_process(true, false);
+        this->p->view3D->reload_scene(false);
+        this->p->view3D->get_canvas3d()->update_instance_printable_state_for_objects(object_idxs);
     }
     else {
         p->view3D->reload_scene(false);

@@ -292,7 +292,7 @@ public:
 	PresetBundle*		m_preset_bundle;
 	bool				m_show_btn_incompatible_presets = false;
 	PresetCollection*	m_presets = nullptr;
-	DynamicPrintConfig*	m_config;
+	DynamicPrintConfig*	m_config {nullptr};
 	ogStaticText*		m_parent_preset_description_line = nullptr;
 	ScalableButton*		m_detach_preset_btn	= nullptr;
 

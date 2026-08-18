@@ -224,9 +224,12 @@ orientation::OrientMesh OrientJob::get_orient_mesh(ModelInstance* instance)
     const Slic3r::DynamicPrintConfig& full_config = wxGetApp().preset_bundle->full_config();
     if (obj->config.has("support_threshold_angle"))
         om.overhang_angle = obj->config.opt_int("support_threshold_angle");
-    else {
+    else if (full_config.has("support_threshold_angle")) {
         om.overhang_angle = full_config.opt_int("support_threshold_angle");
     }
+    // SLA/DLP user presets do not necessarily contain the FFF support angle.
+    // Keep OrientMesh's 30 degree default instead of looking up a missing
+    // option and aborting the auto-orient job.
 
     if (full_config.has("fan_direction") && full_config.has("auxiliary_fan"))
     {

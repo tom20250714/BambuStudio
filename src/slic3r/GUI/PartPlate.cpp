@@ -78,6 +78,18 @@ std::array<unsigned char, 4>  PlateTextureForeground = {0x0, 0xae, 0x42, 0xff};
 namespace Slic3r {
 namespace GUI {
 
+static float plate_control_scale(const Pointfs &shape)
+{
+    if (shape.empty() || wxGetApp().preset_bundle == nullptr ||
+        wxGetApp().preset_bundle->printers.get_edited_preset().printer_technology() != ptSLA)
+        return 1.0f;
+
+    const Vec2d size = get_extents(shape).size();
+    const double reference_size = 256.0;
+    return static_cast<float>(std::clamp(std::min(size.x(), size.y()) / reference_size,
+                                         0.12, 1.0));
+}
+
 std::array<float, 4> PartPlate::SELECT_COLOR		= { 0.2666f, 0.2784f, 0.2784f, 1.0f }; //{ 0.4196f, 0.4235f, 0.4235f, 1.0f };
 std::array<float, 4> PartPlate::UNSELECT_COLOR		= { 0.82f, 0.82f, 0.82f, 1.0f };
 std::array<float, 4> PartPlate::UNSELECT_DARK_COLOR		= { 0.384f, 0.384f, 0.412f, 1.0f };
@@ -453,15 +465,17 @@ void PartPlate::calc_vertex_for_plate_name(GLTexture &texture, GLModel &gl_model
 	    wxCoord   w, h;
         auto      bed_ext = get_extents(m_partplate_list->m_shape);
 		auto      factor  = bed_ext.size()(1) / 200.0;
+        const float ui_scale = plate_control_scale(m_partplate_list->m_shape);
 		ExPolygon poly;
-		float     offset_x = 1;
+		float     offset_x = ui_scale;
 		w                  = int(factor * (texture.get_width() * 16) / texture.get_height());
-		h                  = PARTPLATE_PLATE_NAME_FIX_HEIGHT_SIZE;
-		Vec2d p            = bed_ext[3] + Vec2d(0, PARTPLATE_PLATENAME_OFFSET_Y + h * texture.m_original_height / texture.get_height());
-        poly.contour.append({scale_(p(0) + PARTPLATE_NAME_EDIT_ICON_GAP_LEFT + offset_x), scale_(p(1) - h)});
-        poly.contour.append({scale_(p(0) + PARTPLATE_NAME_EDIT_ICON_GAP_LEFT + w - offset_x), scale_(p(1) - h)});
-        poly.contour.append({scale_(p(0) + PARTPLATE_NAME_EDIT_ICON_GAP_LEFT + w - offset_x), scale_(p(1))});
-        poly.contour.append({scale_(p(0) + PARTPLATE_NAME_EDIT_ICON_GAP_LEFT + offset_x), scale_(p(1))});
+		h                  = static_cast<wxCoord>(PARTPLATE_PLATE_NAME_FIX_HEIGHT_SIZE * ui_scale);
+        const float gap_left = PARTPLATE_NAME_EDIT_ICON_GAP_LEFT * ui_scale;
+		Vec2d p            = bed_ext[3] + Vec2d(0, PARTPLATE_PLATENAME_OFFSET_Y * ui_scale + h * texture.m_original_height / texture.get_height());
+        poly.contour.append({scale_(p(0) + gap_left + offset_x), scale_(p(1) - h)});
+        poly.contour.append({scale_(p(0) + gap_left + w - offset_x), scale_(p(1) - h)});
+        poly.contour.append({scale_(p(0) + gap_left + w - offset_x), scale_(p(1))});
+        poly.contour.append({scale_(p(0) + gap_left + offset_x), scale_(p(1))});
 
 		auto triangles = triangulate_expolygon_2f(poly, NORMALS_UP);
         gl_model.reset();
@@ -474,29 +488,32 @@ void PartPlate::calc_vertex_for_plate_name_edit_icon(GLTexture *texture, int ind
 {
     auto    bed_ext = get_extents(m_partplate_list->m_shape);
 	auto    factor  = bed_ext.size()(1) / 200.0;
+    const float ui_scale = plate_control_scale(m_partplate_list->m_shape);
+    const float icon_size = PARTPLATE_EDIT_PLATE_NAME_ICON_SIZE * ui_scale;
+    const float gap_left = PARTPLATE_NAME_EDIT_ICON_GAP_LEFT * ui_scale;
 	wxCoord w, h;
 	h = int(factor * 16);
 	ExPolygon poly;
 	Vec2d     p        = bed_ext[3];
-	float     offset_x = 1;
-	h = PARTPLATE_EDIT_PLATE_NAME_ICON_SIZE;
-	p += Vec2d(0, PARTPLATE_PLATENAME_OFFSET_Y + h);
+	float     offset_x = ui_scale;
+	h = static_cast<wxCoord>(icon_size);
+	p += Vec2d(0, PARTPLATE_PLATENAME_OFFSET_Y * ui_scale + icon_size);
     std::vector<Vec2f> triangles;
 	if (texture && texture->get_width() > 0 && texture->get_height()) {
 		w    = int(factor * (texture->get_original_width() * 16) / texture->get_height()) + 1;
 
-        poly.contour.append({scale_(p(0) + PARTPLATE_NAME_EDIT_ICON_GAP_LEFT + w), scale_(p(1) - h)});
-        poly.contour.append({scale_(p(0) + PARTPLATE_NAME_EDIT_ICON_GAP_LEFT + w + PARTPLATE_EDIT_PLATE_NAME_ICON_SIZE), scale_(p(1) - h)});
-        poly.contour.append({scale_(p(0) + PARTPLATE_NAME_EDIT_ICON_GAP_LEFT + w + PARTPLATE_EDIT_PLATE_NAME_ICON_SIZE), scale_(p(1))});
-        poly.contour.append({scale_(p(0) + PARTPLATE_NAME_EDIT_ICON_GAP_LEFT + w), scale_(p(1))});
+        poly.contour.append({scale_(p(0) + gap_left + w), scale_(p(1) - icon_size)});
+        poly.contour.append({scale_(p(0) + gap_left + w + icon_size), scale_(p(1) - icon_size)});
+        poly.contour.append({scale_(p(0) + gap_left + w + icon_size), scale_(p(1))});
+        poly.contour.append({scale_(p(0) + gap_left + w), scale_(p(1))});
 
 		triangles = triangulate_expolygon_2f(poly, NORMALS_UP);
 	} else {
 
-        poly.contour.append({scale_(p(0) + PARTPLATE_NAME_EDIT_ICON_GAP_LEFT + offset_x), scale_(p(1) - h)});
-        poly.contour.append({scale_(p(0) + PARTPLATE_NAME_EDIT_ICON_GAP_LEFT + offset_x + PARTPLATE_EDIT_PLATE_NAME_ICON_SIZE), scale_(p(1) - h)});
-        poly.contour.append({scale_(p(0) + PARTPLATE_NAME_EDIT_ICON_GAP_LEFT + offset_x + PARTPLATE_EDIT_PLATE_NAME_ICON_SIZE), scale_(p(1))});
-        poly.contour.append({scale_(p(0) + PARTPLATE_NAME_EDIT_ICON_GAP_LEFT + offset_x), scale_(p(1))});
+        poly.contour.append({scale_(p(0) + gap_left + offset_x), scale_(p(1) - icon_size)});
+        poly.contour.append({scale_(p(0) + gap_left + offset_x + icon_size), scale_(p(1) - icon_size)});
+        poly.contour.append({scale_(p(0) + gap_left + offset_x + icon_size), scale_(p(1))});
+        poly.contour.append({scale_(p(0) + gap_left + offset_x), scale_(p(1))});
 
 		triangles = triangulate_expolygon_2f(poly, NORMALS_UP);
     }
@@ -1711,6 +1728,10 @@ bool PartPlate::check_tpu_printable_status(const DynamicPrintConfig & config, co
 
 bool PartPlate::check_multi_filament_without_prime_tower(const DynamicPrintConfig &config)
 {
+    if (wxGetApp().preset_bundle == nullptr ||
+        wxGetApp().preset_bundle->printers.get_edited_preset().printer_technology() != ptFFF)
+        return true;
+
     int  filament_used_count = get_used_filaments().size();
     if (filament_used_count == 0) { filament_used_count = get_extruders(true).size(); }
     auto prime_tower_enabled = config.option<ConfigOptionBool>("enable_prime_tower");
@@ -1719,7 +1740,8 @@ bool PartPlate::check_multi_filament_without_prime_tower(const DynamicPrintConfi
     if (by_object_plate)
         is_by_object = by_object_plate->value == PrintSequence::ByObject;
     else
-        is_by_object = config.option<ConfigOptionEnum<PrintSequence>>("print_sequence")->value == PrintSequence::ByObject;
+        if (const auto *print_sequence = config.option<ConfigOptionEnum<PrintSequence>>("print_sequence"))
+            is_by_object = print_sequence->value == PrintSequence::ByObject;
     int object_count = get_obj_and_inst_set().size();
     is_by_object     = is_by_object && (object_count > 1);
     if ((!is_by_object) && (filament_used_count > 1) && prime_tower_enabled && (!(prime_tower_enabled->value))) { return false; }
@@ -4274,12 +4296,16 @@ void PartPlateList::calc_vertex_for_number(int index, bool one_number, GLModel &
 	poly.contour.append({ scale_(p(0) + PARTPLATE_ICON_GAP + offset_x), scale_(p(1) - index * (PARTPLATE_ICON_SIZE + PARTPLATE_ICON_GAP)- PARTPLATE_ICON_GAP - PARTPLATE_TEXT_OFFSET_Y) });
 #else // in the bottom
     Vec2d &p        = m_shape[1];
-    float  offset_x = one_number ? PARTPLATE_TEXT_OFFSET_X1 : PARTPLATE_TEXT_OFFSET_X2;
-    auto   right_icon_offset_bed = m_plate_list.size() > 0 ? m_plate_list[0]->get_right_icon_offset_bed() : PARTPLATE_ICON_GAP_LEFT;
-    poly.contour.append({scale_(p(0) + right_icon_offset_bed + offset_x), scale_(p(1) + PARTPLATE_TEXT_OFFSET_Y)});
-    poly.contour.append({scale_(p(0) + right_icon_offset_bed + PARTPLATE_ICON_SIZE - offset_x), scale_(p(1) + PARTPLATE_TEXT_OFFSET_Y)});
-    poly.contour.append({scale_(p(0) + right_icon_offset_bed + PARTPLATE_ICON_SIZE - offset_x), scale_(p(1) + PARTPLATE_ICON_SIZE - PARTPLATE_TEXT_OFFSET_Y)});
-    poly.contour.append({scale_(p(0) + right_icon_offset_bed + offset_x), scale_(p(1) + PARTPLATE_ICON_SIZE - PARTPLATE_TEXT_OFFSET_Y)});
+    const float ui_scale = plate_control_scale(m_shape);
+    const float icon_size = PARTPLATE_ICON_SIZE * ui_scale;
+    const float offset_x = (one_number ? PARTPLATE_TEXT_OFFSET_X1 : PARTPLATE_TEXT_OFFSET_X2) * ui_scale;
+    const float offset_y = PARTPLATE_TEXT_OFFSET_Y * ui_scale;
+    const float right_icon_offset_bed =
+        (m_plate_list.size() > 0 ? m_plate_list[0]->get_right_icon_offset_bed() : PARTPLATE_ICON_GAP_LEFT) * ui_scale;
+    poly.contour.append({scale_(p(0) + right_icon_offset_bed + offset_x), scale_(p(1) + offset_y)});
+    poly.contour.append({scale_(p(0) + right_icon_offset_bed + icon_size - offset_x), scale_(p(1) + offset_y)});
+    poly.contour.append({scale_(p(0) + right_icon_offset_bed + icon_size - offset_x), scale_(p(1) + icon_size - offset_y)});
+    poly.contour.append({scale_(p(0) + right_icon_offset_bed + offset_x), scale_(p(1) + icon_size - offset_y)});
 #endif
     auto triangles = triangulate_expolygon_2f(poly, NORMALS_UP);
     gl_model.reset();
@@ -4290,11 +4316,18 @@ void PartPlateList::calc_vertex_for_icons(int index, GLModel &gl_model)
 {
     ExPolygon poly;
     Vec2d &   p = m_shape[2];
-    auto      right_icon_offset_bed = m_plate_list.size() > 0 ? m_plate_list[0]->get_right_icon_offset_bed() : PARTPLATE_ICON_GAP_LEFT;
-    poly.contour.append({scale_(p(0) + right_icon_offset_bed), scale_(p(1) - index * (PARTPLATE_ICON_SIZE + PARTPLATE_ICON_GAP_Y) - PARTPLATE_ICON_GAP_TOP - PARTPLATE_ICON_SIZE)});
-    poly.contour.append({scale_(p(0) + right_icon_offset_bed + PARTPLATE_ICON_SIZE), scale_(p(1) - index * (PARTPLATE_ICON_SIZE + PARTPLATE_ICON_GAP_Y) - PARTPLATE_ICON_GAP_TOP - PARTPLATE_ICON_SIZE)});
-    poly.contour.append({scale_(p(0) + right_icon_offset_bed + PARTPLATE_ICON_SIZE), scale_(p(1) - index * (PARTPLATE_ICON_SIZE + PARTPLATE_ICON_GAP_Y) - PARTPLATE_ICON_GAP_TOP)});
-    poly.contour.append({scale_(p(0) + right_icon_offset_bed), scale_(p(1) - index * (PARTPLATE_ICON_SIZE + PARTPLATE_ICON_GAP_Y) - PARTPLATE_ICON_GAP_TOP)});
+    const float ui_scale = plate_control_scale(m_shape);
+    const float icon_size = PARTPLATE_ICON_SIZE * ui_scale;
+    const float icon_gap_y = PARTPLATE_ICON_GAP_Y * ui_scale;
+    const float icon_gap_top = PARTPLATE_ICON_GAP_TOP * ui_scale;
+    const float right_icon_offset_bed =
+        (m_plate_list.size() > 0 ? m_plate_list[0]->get_right_icon_offset_bed() : PARTPLATE_ICON_GAP_LEFT) * ui_scale;
+    const float bottom = p(1) - index * (icon_size + icon_gap_y) - icon_gap_top - icon_size;
+    const float top = p(1) - index * (icon_size + icon_gap_y) - icon_gap_top;
+    poly.contour.append({scale_(p(0) + right_icon_offset_bed), scale_(bottom)});
+    poly.contour.append({scale_(p(0) + right_icon_offset_bed + icon_size), scale_(bottom)});
+    poly.contour.append({scale_(p(0) + right_icon_offset_bed + icon_size), scale_(top)});
+    poly.contour.append({scale_(p(0) + right_icon_offset_bed), scale_(top)});
 
     auto triangles = triangulate_expolygon_2f(poly, NORMALS_UP);
     gl_model.reset();
@@ -4614,6 +4647,10 @@ void PartPlateList::release_icon_textures()
 
 void PartPlateList::set_default_wipe_tower_pos_for_plate(int plate_idx, bool init_pos, bool keep_existing)
 {
+    if (wxGetApp().preset_bundle == nullptr ||
+        wxGetApp().preset_bundle->printers.get_edited_preset().printer_technology() != ptFFF)
+        return;
+
     DynamicConfig &     proj_cfg     = wxGetApp().preset_bundle->project_config;
     ConfigOptionFloats *wipe_tower_x = proj_cfg.opt<ConfigOptionFloats>("wipe_tower_x");
     ConfigOptionFloats *wipe_tower_y = proj_cfg.opt<ConfigOptionFloats>("wipe_tower_y");
